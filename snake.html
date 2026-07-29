@@ -643,6 +643,26 @@
     return null;
   }
 
+  // shared by every list-style menu screen (solo's main menu/options, and
+  // multiplayer's mode/host-options/join-options/room-list/result screens):
+  // up/down cycle a selected index with wraparound and return the new
+  // value; action/select and back just fire a callback and return
+  // undefined, since those callbacks often set the index themselves (e.g.
+  // resetting to 0 when moving to a different screen) - returning the
+  // stale pre-call index there would silently overwrite that. Callers only
+  // assign the index back when the return value isn't undefined.
+  // Extracted because each screen used to reimplement this cycling from
+  // scratch - which is exactly how the "1/9 does nothing in multiplayer"
+  // bug happened: a fix/feature added to one copy never made it into the
+  // others.
+  function menuCycle(kind, index, count, onSelect, onBack){
+    if (kind === "up" && count) return (index - 1 + count) % count;
+    if (kind === "down" && count) return (index + 1) % count;
+    if (kind === "back"){ if (onBack) onBack(); return undefined; }
+    if ((kind === "action" || kind === "select") && count && onSelect) onSelect();
+    return undefined;
+  }
+
   function mpNormalizeKey(key){
     if (key === "ArrowUp" || key === "w" || key === "W" || key === "2") return "up";
     if (key === "ArrowDown" || key === "s" || key === "S" || key === "8") return "down";
@@ -687,22 +707,19 @@
     if (!action) return;
 
     if (state === "mpmenu"){
-      var items = ["HOST GAME", "JOIN GAME"];
-      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items.length) % items.length;
-      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items.length;
-      else if (action === "select"){
+      var r1 = menuCycle(action, mpSubIndex, 2, function(){
         state = mpSubIndex === 0 ? "mphostoptions" : "mpjoinmenu";
         mpSubIndex = 0;
-      } else if (action === "back"){ state = "menu"; }
+      }, function(){ state = "menu"; });
+      if (r1 !== undefined) mpSubIndex = r1;
       return;
     }
 
     if (state === "mphostoptions"){
-      var items2 = ["PUBLIC", "PRIVATE"];
-      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items2.length) % items2.length;
-      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items2.length;
-      else if (action === "select"){ startHostGame(mpSubIndex === 0); }
-      else if (action === "back"){ state = "mpmenu"; mpSubIndex = 0; }
+      var r2 = menuCycle(action, mpSubIndex, 2,
+        function(){ startHostGame(mpSubIndex === 0); },
+        function(){ state = "mpmenu"; mpSubIndex = 0; });
+      if (r2 !== undefined) mpSubIndex = r2;
       return;
     }
 
@@ -712,22 +729,19 @@
     }
 
     if (state === "mpjoinmenu"){
-      var items3 = ["PUBLIC LIST", "ENTER CODE"];
-      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items3.length) % items3.length;
-      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items3.length;
-      else if (action === "select"){
+      var r3 = menuCycle(action, mpSubIndex, 2, function(){
         if (mpSubIndex === 0) enterJoinList();
         else { mpJoinDigits = []; mpJoinError = null; state = "mpjoincode"; }
-      } else if (action === "back"){ state = "mpmenu"; mpSubIndex = 0; }
+      }, function(){ state = "mpmenu"; mpSubIndex = 0; });
+      if (r3 !== undefined) mpSubIndex = r3;
       return;
     }
 
     if (state === "mpjoinlist"){
-      var n = mpPublicRooms.length;
-      if (action === "up" && n) mpSubIndex = (mpSubIndex - 1 + n) % n;
-      else if (action === "down" && n) mpSubIndex = (mpSubIndex + 1) % n;
-      else if (action === "select" && n){ joinRoomByCode(mpPublicRooms[mpSubIndex].code); }
-      else if (action === "back"){ state = "mpjoinmenu"; mpSubIndex = 0; }
+      var r4 = menuCycle(action, mpSubIndex, mpPublicRooms.length,
+        function(){ joinRoomByCode(mpPublicRooms[mpSubIndex].code); },
+        function(){ state = "mpjoinmenu"; mpSubIndex = 0; });
+      if (r4 !== undefined) mpSubIndex = r4;
       return;
     }
 
@@ -736,15 +750,13 @@
         if (action === "back"){ leaveMp(); state = "menu"; }
         return;
       }
-      var items4 = ["REPLAY", "EXIT"];
-      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items4.length) % items4.length;
-      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items4.length;
-      else if (action === "select"){
+      var r5 = menuCycle(action, mpSubIndex, 2, function(){
         if (mpSubIndex === 0){
           mp.voted = true;
           wsSend({type: "replay"});
         } else { leaveMp(); state = "menu"; }
-      } else if (action === "back"){ leaveMp(); state = "menu"; }
+      }, function(){ leaveMp(); state = "menu"; });
+      if (r5 !== undefined) mpSubIndex = r5;
       return;
     }
   }
@@ -798,9 +810,8 @@
 
   function handleAction(kind){
     if (state === "menu"){
-      if (kind === "up") menuIndex = (menuIndex - 1 + MENU_ACTIONS.length) % MENU_ACTIONS.length;
-      else if (kind === "down") menuIndex = (menuIndex + 1) % MENU_ACTIONS.length;
-      else if (kind === "action") selectMenuItem();
+      var rMenu = menuCycle(kind, menuIndex, MENU_ACTIONS.length, selectMenuItem, null);
+      if (rMenu !== undefined) menuIndex = rMenu;
       return;
     }
     if (state === "highscore" || state === "howto"){
@@ -809,9 +820,7 @@
     }
     if (state === "options"){
       var optItems = optionsItems();
-      if (kind === "up") optionsIndex = (optionsIndex - 1 + optItems.length) % optItems.length;
-      else if (kind === "down") optionsIndex = (optionsIndex + 1) % optItems.length;
-      else if (kind === "action"){
+      var rOpt = menuCycle(kind, optionsIndex, optItems.length, function(){
         if (optionsIndex === 0){
           wallsEnabled = !wallsEnabled;
         } else if (optionsIndex === 1){
@@ -820,9 +829,8 @@
         } else if (optionsIndex === 2){
           startNameEntry("edit");
         }
-      } else if (kind === "back"){
-        state = "menu";
-      }
+      }, function(){ state = "menu"; });
+      if (rOpt !== undefined) optionsIndex = rOpt;
       return;
     }
 
