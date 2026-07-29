@@ -42,12 +42,15 @@ copy of `snake.html` lingering on a phone after an update.
 
 - Classic numeric keypad: 2/4/6/8 to move, 1/9 for a diagonal corner-turn,
   5 to start/pause/select, `*`/`#` for back/confirm in menus.
-- A D-pad (arrows + OK) sits in the space between the screen and the
-  keypad, mirroring the same controls - handy on mobile.
-- OPTIONS menu has a "BIG CORNER" toggle: while it's on and you're actually
-  playing (not paused/menu), the tap targets for keys 1 and 9 expand to
-  cover most of the keypad (nothing changes visually), making one-handed
-  corner-turn steering much easier on a touchscreen.
+- A Nokia 3210-style nav cluster sits fixed right under the screen: an
+  up/OK/down rocker with a BACK key to its left (standing in for the
+  classic "C" key) - mirrors the keypad's move/select/back everywhere,
+  including menus, gameplay and multiplayer.
+- OPTIONS menu holds two toggles: WALLS ON/OFF, and "BIG CORNER" - while
+  the latter is on and you're actually playing (not paused/menu), the tap
+  targets for keys 1 and 9 expand to cover most of the keypad (nothing
+  changes visually), making one-handed corner-turn steering much easier on
+  a touchscreen.
 
 ## Mobile
 
