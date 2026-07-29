@@ -18,7 +18,11 @@
     font-family: Arial, Helvetica, sans-serif;
     -webkit-tap-highlight-color: transparent;
     user-select:none;
-    touch-action: manipulation;
+    touch-action: none;
+    overflow:hidden;
+    overscroll-behavior:none;
+    position:fixed;
+    inset:0;
   }
 
   .phone{
@@ -92,9 +96,9 @@
 
   .dpad{
     display:grid;
-    grid-template-columns:40px 40px;
-    grid-template-rows:repeat(3, 40px);
-    gap:6px;
+    grid-template-columns:50px 50px 42px;
+    grid-template-rows:38px 38px;
+    gap:8px;
     justify-content:center;
     margin:12px auto 0;
   }
@@ -104,7 +108,6 @@
     justify-content:center;
     background:linear-gradient(160deg,#7d8085,#55585d);
     border:none;
-    border-radius:8px;
     color:#e7e9eb;
     font-size:14px;
     box-shadow:
@@ -119,11 +122,12 @@
       0 1px 0 rgba(0,0,0,0.45),
       inset 0 1px 0 rgba(255,255,255,0.15);
   }
-  /* Nokia 3210-style cluster: up/ok/down rocker with a C/back key to its left */
-  .dbtn-up{ grid-column:2; grid-row:1; }
-  .dbtn-ok{ grid-column:2; grid-row:2; background:linear-gradient(160deg,#8a9a72,#5c6a4c); font-size:11px; font-weight:700; }
-  .dbtn-down{ grid-column:2; grid-row:3; }
-  .dbtn-back{ grid-column:1; grid-row:2; font-size:9px; font-weight:700; }
+  /* Nokia 3210-style cluster: a tall C/back pill and a tall OK pill side by
+     side, with up/down grouped as their own smaller stacked pair to the right */
+  .dbtn-back{ grid-column:1; grid-row:1 / span 2; font-size:11px; font-weight:700; border-radius:24px; }
+  .dbtn-ok{ grid-column:2; grid-row:1 / span 2; background:linear-gradient(160deg,#8a9a72,#5c6a4c); font-size:12px; font-weight:700; border-radius:24px; }
+  .dbtn-up{ grid-column:3; grid-row:1; font-size:16px; border-radius:9px 9px 4px 4px; }
+  .dbtn-down{ grid-column:3; grid-row:2; font-size:16px; border-radius:4px 4px 9px 9px; }
 
   .keypad{
     position:relative;
@@ -136,17 +140,17 @@
 
   /* invisible, oversized tap targets for corner-turn (keys 1 and 9) -
      enabled via OPTIONS, active during gameplay only. Purely functional,
-     nothing about the visible keypad below them changes. */
+     nothing about the visible keypad below them changes. Each one covers
+     its entire half of the keypad (all rows, edge to edge) so there's no
+     dead strip anywhere left/right/above/below that fails to register. */
   .corner-zone{
     position:absolute;
     display:none;
     background:transparent;
     z-index:5;
   }
-  .cz-1a{ left:0;     top:0;   width:66.6667%; height:25%; }
-  .cz-1b{ left:0;     top:25%; width:50%;      height:25%; }
-  .cz-9a{ left:33.3333%; top:50%; width:66.6667%; height:25%; }
-  .cz-9b{ left:50%;      top:25%; width:50%;      height:25%; }
+  .cz-1{ left:0;  top:0; width:50%; height:100%; }
+  .cz-9{ left:50%; top:0; width:50%; height:100%; }
 
   .key{
     display:flex;
@@ -221,10 +225,8 @@
       <button class="key" data-action="" data-digit="0"><span class="num">0</span></button>
       <button class="key" data-action="" data-digit="#">#</button>
 
-      <div class="corner-zone cz-1a" data-zone="1"></div>
-      <div class="corner-zone cz-1b" data-zone="1"></div>
-      <div class="corner-zone cz-9a" data-zone="9"></div>
-      <div class="corner-zone cz-9b" data-zone="9"></div>
+      <div class="corner-zone cz-1" data-zone="1"></div>
+      <div class="corner-zone cz-9" data-zone="9"></div>
     </div>
   </div>
 
@@ -272,6 +274,7 @@
     "Z":["11111","00001","00010","00100","01000","10000","11111"],
     " ":["00000","00000","00000","00000","00000","00000","00000"],
     "-":["00000","00000","00000","11111","00000","00000","00000"],
+    "/":["00001","00001","00010","00100","01000","10000","10000"],
     "!":["00100","00100","00100","00100","00100","00000","00100"],
     ">":["01000","00100","00010","00001","00010","00100","01000"],
     "_":["00000","00000","00000","00000","00000","00000","11111"],
@@ -373,16 +376,17 @@
   };
   var T9_TIMEOUT_MS = 700;
 
-  function startNameEntry(){
+  function startNameEntry(mode){ // mode: "submit" (after a qualifying game) or "edit" (from OPTIONS)
     var stored = (localStorage.getItem("snakePlayerName") || "").toUpperCase().slice(0, 8);
     nameEntry = {
       chars: stored ? stored.split("") : [],
       lastDigit: null,
       lastPressTime: 0,
       cycleIndex: 0,
-      error: null
+      error: null,
+      mode: mode
     };
-    pendingScore = score;
+    if (mode === "submit") pendingScore = score;
     state = "nameentry";
   }
 
@@ -391,16 +395,20 @@
     nameEntry.error = null;
     var now = Date.now();
     if (key === "Backspace" || key === "*"){
-      nameEntry.chars.pop();
-      nameEntry.lastDigit = null;
+      if (nameEntry.chars.length){
+        nameEntry.chars.pop();
+        nameEntry.lastDigit = null;
+      } else if (key === "*"){
+        state = nameEntry.mode === "edit" ? "options" : "gameover";
+      }
       return;
     }
     if (key === "Enter" || key === "#"){
-      submitName();
+      confirmNameEntry();
       return;
     }
     if (key === "Escape"){
-      state = "gameover";
+      state = nameEntry.mode === "edit" ? "options" : "gameover";
       return;
     }
     if (/^[a-zA-Z]$/.test(key)){
@@ -422,8 +430,13 @@
     nameEntry.lastPressTime = now;
   }
 
-  function submitName(){
+  function confirmNameEntry(){
     var name = nameEntry.chars.join("").trim();
+    if (nameEntry.mode === "edit"){
+      if (name) localStorage.setItem("snakePlayerName", name);
+      state = "options";
+      return;
+    }
     if (!name){
       state = "gameover"; // nothing typed - treat as skip
       return;
@@ -449,7 +462,8 @@
   function optionsItems(){
     return [
       "WALLS " + (wallsEnabled ? "ON" : "OFF"),
-      "BIG CORNER " + (bigCornerButtons ? "ON" : "OFF")
+      "1/9 ONLY " + (bigCornerButtons ? "ON" : "OFF"),
+      "NAME " + myStoredName("----")
     ];
   }
 
@@ -516,9 +530,9 @@
       leaderboard = msg.entries || [];
       leaderboardDate = msg.date;
       leaderboardAvailable = true;
-      if (state === "nameentry") state = "gameover"; // just-submitted score was accepted
+      if (state === "nameentry" && nameEntry && nameEntry.mode === "submit") state = "gameover"; // just-submitted score was accepted
     } else if (msg.type === "highscoreError"){
-      if (state === "nameentry" && nameEntry){
+      if (state === "nameentry" && nameEntry && nameEntry.mode === "submit"){
         nameEntry.error = msg.error === "profanity" ? "NOT ALLOWED" : "INVALID NAME";
       }
     } else if (msg.type === "hosted"){
@@ -772,6 +786,8 @@
         } else if (optionsIndex === 1){
           bigCornerButtons = !bigCornerButtons;
           localStorage.setItem("snakeBigCorner", bigCornerButtons ? "1" : "0");
+        } else if (optionsIndex === 2){
+          startNameEntry("edit");
         }
       } else if (kind === "back"){
         state = "menu";
@@ -846,7 +862,7 @@
 
   function gameOver(){
     if (qualifiesForBoard(score)){
-      startNameEntry();
+      startNameEntry("submit");
     } else {
       state = "gameover";
     }
@@ -976,8 +992,10 @@
       drawFood();
       drawOverlayBox(["PAUSED"]);
     } else if (state === "nameentry"){
-      drawSnake();
-      drawFood();
+      if (nameEntry && nameEntry.mode === "submit"){
+        drawSnake();
+        drawFood();
+      }
       drawNameEntryBox();
     } else if (state === "gameover"){
       drawSnake();
@@ -1093,12 +1111,8 @@
 
   function drawNameEntryBox(){
     var padded = nameEntry.chars.join("") + "_".repeat(8 - nameEntry.chars.length);
-    var lines = [
-      nameEntry.error || "TOP 5 SCORE!",
-      padded,
-      "0=SPACE",
-      "*DEL #OK"
-    ];
+    var title = nameEntry.error || (nameEntry.mode === "edit" ? "EDIT NAME" : "TOP 5 SCORE!");
+    var lines = [title, padded, "0=SPACE", "*DEL #OK"];
     drawOverlayBox(lines);
   }
 
