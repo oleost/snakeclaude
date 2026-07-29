@@ -1,0 +1,12 @@
+services:
+  snake:
+    build: .
+    container_name: snake
+    ports:
+      - "8934:8934"
+    volumes:
+      - snake-data:/data
+    restart: unless-stopped
+
+volumes:
+  snake-data:

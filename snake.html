@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snake</title>
+<style>
+  :root{
+    color-scheme: dark;
+  }
+  html,body{
+    height:100%;
+    margin:0;
+    background:#1b1d22;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family: Arial, Helvetica, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    user-select:none;
+  }
+
+  .phone{
+    width:min(92vw, 380px);
+    background:linear-gradient(160deg,#8f9296 0%,#6c6f74 45%,#54565b 100%);
+    border-radius:34px;
+    padding:22px 20px 26px;
+    box-shadow:
+      0 25px 50px rgba(0,0,0,0.55),
+      inset 0 2px 2px rgba(255,255,255,0.35),
+      inset 0 -6px 10px rgba(0,0,0,0.35);
+    box-sizing:border-box;
+  }
+
+  .brandrow{
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    padding:0 4px 10px;
+  }
+  .earpiece{
+    width:46px;
+    height:6px;
+    border-radius:4px;
+    background:#3a3c40;
+    box-shadow:inset 0 1px 2px rgba(0,0,0,0.6);
+  }
+
+  .screen-bezel{
+    position:relative;
+    background:#15181a;
+    border-radius:10px;
+    padding:10px;
+    box-shadow:
+      inset 0 3px 8px rgba(0,0,0,0.8),
+      inset 0 0 0 2px #0b0c0d;
+  }
+  /* simulated LCD dot-matrix grid + glass glare, laid over the canvas
+     at the exact hardware pixel pitch (98x74) so it reads as individual
+     display dots rather than a smooth modern screen */
+  .screen-bezel::after{
+    content:"";
+    position:absolute;
+    inset:10px;
+    border-radius:2px;
+    pointer-events:none;
+    background-image:
+      linear-gradient(135deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 32%),
+      linear-gradient(to right, rgba(0,0,0,0.10) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0,0,0,0.10) 1px, transparent 1px);
+    background-size:
+      100% 100%,
+      calc(100% / 98) 100%,
+      100% calc(100% / 74);
+    background-repeat: no-repeat, repeat, repeat;
+  }
+
+  canvas{
+    display:block;
+    width:100%;
+    height:auto;
+    aspect-ratio: 98 / 74;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border-radius:2px;
+  }
+
+  .hint{
+    text-align:center;
+    color:#dfe3e6;
+    font-size:10px;
+    letter-spacing:0.5px;
+    margin-top:10px;
+    opacity:0.85;
+  }
+
+  .keypad{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:8px;
+    margin-top:16px;
+  }
+
+  .key{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    height:44px;
+    background:linear-gradient(160deg,#7d8085,#55585d);
+    border:none;
+    border-radius:9px;
+    color:#e7e9eb;
+    box-shadow:
+      0 3px 0 rgba(0,0,0,0.45),
+      inset 0 1px 0 rgba(255,255,255,0.25);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .key:active{
+    transform:translateY(2px);
+    box-shadow:
+      0 1px 0 rgba(0,0,0,0.45),
+      inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .key .num{
+    font-size:16px;
+    font-weight:700;
+    line-height:1;
+  }
+  .key .letters{
+    font-size:7px;
+    letter-spacing:1px;
+    color:#c7cace;
+    margin-top:2px;
+  }
+  .key-mid{
+    background:linear-gradient(160deg,#8a9a72,#5c6a4c);
+  }
+</style>
+</head>
+<body>
+
+  <div class="phone">
+    <div class="brandrow">
+      <div class="earpiece"></div>
+    </div>
+
+    <div class="screen-bezel">
+      <canvas id="game" width="98" height="74"></canvas>
+    </div>
+
+    <div class="hint">2·4·6·8 = MOVE &nbsp; 1/9 = CORNER TURN &nbsp; 5 = START/PAUSE</div>
+
+    <div class="keypad">
+      <button class="key" data-action="corner-ul" data-digit="1"><span class="num">1</span></button>
+      <button class="key" data-action="up" data-digit="2"><span class="num">2</span><span class="letters">ABC</span></button>
+      <button class="key" data-action="" data-digit="3"><span class="num">3</span><span class="letters">DEF</span></button>
+
+      <button class="key" data-action="left" data-digit="4"><span class="num">4</span><span class="letters">GHI</span></button>
+      <button class="key key-mid" data-action="action" data-digit="5"><span class="num">5</span><span class="letters">JKL</span></button>
+      <button class="key" data-action="right" data-digit="6"><span class="num">6</span><span class="letters">MNO</span></button>
+
+      <button class="key" data-action="" data-digit="7"><span class="num">7</span><span class="letters">PQRS</span></button>
+      <button class="key" data-action="down" data-digit="8"><span class="num">8</span><span class="letters">TUV</span></button>
+      <button class="key" data-action="corner-dr" data-digit="9"><span class="num">9</span><span class="letters">WXYZ</span></button>
+
+      <button class="key" data-action="" data-digit="*">✻</button>
+      <button class="key" data-action="" data-digit="0"><span class="num">0</span></button>
+      <button class="key" data-action="" data-digit="#">#</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- 5x7 pixel font ----------
+  var FONT = {
+    "0":["01110","10001","10011","10101","11001","10001","01110"],
+    "1":["00100","01100","00100","00100","00100","00100","11111"],
+    "2":["01110","10001","00001","00010","00100","01000","11111"],
+    "3":["01110","10001","00001","00110","00001","10001","01110"],
+    "4":["00010","00110","01010","10010","11111","00010","00010"],
+    "5":["11111","10000","11110","00001","00001","10001","01110"],
+    "6":["00110","01000","10000","11110","10001","10001","01110"],
+    "7":["11111","00001","00010","00100","01000","01000","01000"],
+    "8":["01110","10001","10001","01110","10001","10001","01110"],
+    "9":["01110","10001","10001","01111","00001","00010","01100"],
+    "A":["01110","10001","10001","11111","10001","10001","10001"],
+    "B":["11110","10001","10001","11110","10001","10001","11110"],
+    "C":["01111","10000","10000","10000","10000","10000","01111"],
+    "D":["11110","10001","10001","10001","10001","10001","11110"],
+    "E":["11111","10000","10000","11110","10000","10000","11111"],
+    "F":["11111","10000","10000","11110","10000","10000","10000"],
+    "G":["01111","10000","10000","10111","10001","10001","01111"],
+    "H":["10001","10001","10001","11111","10001","10001","10001"],
+    "I":["11111","00100","00100","00100","00100","00100","11111"],
+    "J":["00001","00001","00001","00001","00001","10001","01110"],
+    "K":["10001","10010","10100","11000","10100","10010","10001"],
+    "L":["10000","10000","10000","10000","10000","10000","11111"],
+    "M":["10001","11011","10101","10001","10001","10001","10001"],
+    "N":["10001","11001","10101","10011","10001","10001","10001"],
+    "O":["01110","10001","10001","10001","10001","10001","01110"],
+    "P":["11110","10001","10001","11110","10000","10000","10000"],
+    "Q":["01110","10001","10001","10001","10101","10010","01101"],
+    "R":["11110","10001","10001","11110","10100","10010","10001"],
+    "S":["01111","10000","10000","01110","00001","00001","11110"],
+    "T":["11111","00100","00100","00100","00100","00100","00100"],
+    "U":["10001","10001","10001","10001","10001","10001","01110"],
+    "V":["10001","10001","10001","10001","10001","01010","00100"],
+    "W":["10001","10001","10001","10101","10101","11011","10001"],
+    "X":["10001","10001","01010","00100","01010","10001","10001"],
+    "Y":["10001","10001","01010","00100","00100","00100","00100"],
+    "Z":["11111","00001","00010","00100","01000","10000","11111"],
+    " ":["00000","00000","00000","00000","00000","00000","00000"],
+    "-":["00000","00000","00000","11111","00000","00000","00000"],
+    "!":["00100","00100","00100","00100","00100","00000","00100"],
+    ">":["01000","00100","00010","00001","00010","00100","01000"],
+    "_":["00000","00000","00000","00000","00000","00000","11111"],
+    "*":["00000","01010","00100","11111","00100","01010","00000"],
+    "#":["01010","01010","11111","01010","11111","01010","01010"],
+    "=":["00000","00000","11111","00000","11111","00000","00000"]
+  };
+
+  function drawText(ctx, str, x, y, on){
+    var cx = x;
+    for (var i=0;i<str.length;i++){
+      var g = FONT[str[i]] || FONT[" "];
+      for (var r=0;r<7;r++){
+        for (var c=0;c<5;c++){
+          if (g[r][c] === "1"){
+            ctx.fillRect(cx+c, y+r, 1, 1);
+          }
+        }
+      }
+      cx += 6;
+    }
+    return cx;
+  }
+  function textWidth(str){ return str.length*6 - 1; }
+
+  // ---------- config ----------
+  var CELL = 4;
+  var HUD_H = 8;
+  var GRID_W = 24;
+  var GRID_H = 16;
+  var BORDER = 1;
+  var OX = BORDER;
+  var OY = HUD_H + BORDER;
+  var W = GRID_W*CELL + BORDER*2;              // 98
+  var H = HUD_H + GRID_H*CELL + BORDER*2;       // 74
+
+  var BG = "#c7d68f";
+  var FG = "#2b2f1a";
+  var MID = "#6f7a52"; // lighter "second gray" tone for the opponent's snake in multiplayer
+
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+
+  var HS_KEY = "snakeHighScore";
+  var legacyHighScore = localStorage.getItem("nokiaSnakeHighScore");
+  if (legacyHighScore !== null && localStorage.getItem(HS_KEY) === null){
+    localStorage.setItem(HS_KEY, legacyHighScore);
+    localStorage.removeItem("nokiaSnakeHighScore");
+  }
+  var highScore = parseInt(localStorage.getItem(HS_KEY) || "0", 10) || 0;
+
+  var state = "menu";
+  // menu | highscore | howto | playing | paused | gameover | nameentry |
+  // mpmenu | mphostoptions | mphostwait | mpjoinmenu | mpjoinlist | mpjoincode | mpplaying | mpresult
+  var wallsEnabled = true; // classic mode: hitting the border ends the run
+  var menuIndex = 0;
+  var MENU_ACTIONS = ["play", "multiplayer", "walls", "highscore", "howto"];
+  var snake, dir, dirQueue, food, score, tickMs, acc, lastTime, justHitHighScore;
+
+  // ---------- daily server leaderboard ----------
+  var MAX_BOARD_ENTRIES = 5;
+  var leaderboard = [];
+  var leaderboardDate = null;
+  var leaderboardAvailable = false;
+  var pendingScore = 0;
+  var nameEntry = null;
+
+  function getClientId(){
+    var id = localStorage.getItem("snakeClientId");
+    if (!id){
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : ("c" + Date.now() + Math.random().toString(36).slice(2));
+      localStorage.setItem("snakeClientId", id);
+    }
+    return id;
+  }
+
+  function loadLeaderboard(){
+    fetch("/api/highscores").then(function(r){ return r.json(); }).then(function(body){
+      leaderboard = body.entries || [];
+      leaderboardDate = body.date;
+      leaderboardAvailable = true;
+    }).catch(function(){ leaderboardAvailable = false; });
+  }
+  loadLeaderboard();
+
+  function qualifiesForBoard(s){
+    if (!leaderboardAvailable || s <= 0) return false;
+    if (leaderboard.length < MAX_BOARD_ENTRIES) return true;
+    return s > leaderboard[leaderboard.length-1].score;
+  }
+
+  var T9_MAP = {
+    "0":[" "], "1":["1"],
+    "2":["A","B","C"], "3":["D","E","F"], "4":["G","H","I"],
+    "5":["J","K","L"], "6":["M","N","O"], "7":["P","Q","R","S"],
+    "8":["T","U","V"], "9":["W","X","Y","Z"]
+  };
+  var T9_TIMEOUT_MS = 700;
+
+  function startNameEntry(){
+    var stored = (localStorage.getItem("snakePlayerName") || "").toUpperCase().slice(0, 8);
+    nameEntry = {
+      chars: stored ? stored.split("") : [],
+      lastDigit: null,
+      lastPressTime: 0,
+      cycleIndex: 0,
+      error: null
+    };
+    pendingScore = score;
+    state = "nameentry";
+  }
+
+  function nameEntryKey(key){
+    if (!nameEntry) return;
+    nameEntry.error = null;
+    var now = Date.now();
+    if (key === "Backspace" || key === "*"){
+      nameEntry.chars.pop();
+      nameEntry.lastDigit = null;
+      return;
+    }
+    if (key === "Enter" || key === "#"){
+      submitName();
+      return;
+    }
+    if (key === "Escape"){
+      state = "gameover";
+      return;
+    }
+    if (/^[a-zA-Z]$/.test(key)){
+      if (nameEntry.chars.length < 8) nameEntry.chars.push(key.toUpperCase());
+      nameEntry.lastDigit = null;
+      return;
+    }
+    var letters = T9_MAP[key];
+    if (!letters) return;
+    if (nameEntry.lastDigit === key && (now - nameEntry.lastPressTime) < T9_TIMEOUT_MS && nameEntry.chars.length){
+      nameEntry.cycleIndex = (nameEntry.cycleIndex + 1) % letters.length;
+      nameEntry.chars[nameEntry.chars.length-1] = letters[nameEntry.cycleIndex];
+    } else {
+      if (nameEntry.chars.length >= 8) return;
+      nameEntry.chars.push(letters[0]);
+      nameEntry.cycleIndex = 0;
+      nameEntry.lastDigit = key;
+    }
+    nameEntry.lastPressTime = now;
+  }
+
+  function submitName(){
+    var name = nameEntry.chars.join("").trim();
+    if (!name){
+      state = "gameover"; // nothing typed - treat as skip
+      return;
+    }
+    localStorage.setItem("snakePlayerName", name);
+    fetch("/api/highscores", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: name, score: pendingScore, clientId: getClientId()})
+    }).then(function(r){
+      return r.json().then(function(body){ return {ok: r.ok, body: body}; });
+    }).then(function(res){
+      if (res.ok){
+        leaderboard = res.body.entries || [];
+        leaderboardDate = res.body.date;
+        state = "gameover";
+      } else if (res.body && res.body.error === "profanity"){
+        nameEntry.error = "NOT ALLOWED";
+      } else {
+        nameEntry.error = "INVALID NAME";
+      }
+    }).catch(function(){
+      state = "gameover"; // offline - just skip saving
+    });
+  }
+
+  function menuLabel(i){
+    switch(MENU_ACTIONS[i]){
+      case "play": return "PLAY";
+      case "multiplayer": return "MULTIPLAYER";
+      case "walls": return "WALLS " + (wallsEnabled ? "ON" : "OFF");
+      case "highscore": return "HIGH SCORE";
+      case "howto": return "HOW TO PLAY";
+    }
+  }
+
+  // ---------- multiplayer ----------
+  // Server-authoritative: the client only ever sends direction input and
+  // polls for the current state. All movement, collisions and timing are
+  // decided by the server's own clock, never by the client.
+  var MP_POLL_MS = 120;
+  var mp = null;              // active room session, or null
+  var mpSubIndex = 0;         // shared selection index for the small mp menus
+  var mpJoinDigits = [];
+  var mpJoinError = null;
+  var mpPublicRooms = [];
+  var mpListTimer = null;
+  var mpPollTimer = null;
+
+  function isMpState(s){ return typeof s === "string" && s.indexOf("mp") === 0; }
+
+  function mpFetch(path, body){
+    var opts = body
+      ? {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)}
+      : {method:"GET"};
+    return fetch(path, opts).then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(b){ return {ok:r.ok, body:b}; });
+    });
+  }
+
+  function myStoredName(fallback){
+    return (localStorage.getItem("snakePlayerName") || fallback).toUpperCase().slice(0, 8);
+  }
+
+  function stopMpPolling(){
+    if (mpPollTimer){ clearInterval(mpPollTimer); mpPollTimer = null; }
+  }
+
+  function startMpPolling(){
+    stopMpPolling();
+    mpPollTimer = setInterval(pollMpState, MP_POLL_MS);
+    pollMpState();
+  }
+
+  function pollMpState(){
+    if (!mp) return;
+    mpFetch("/api/mp/state?code=" + encodeURIComponent(mp.code) + "&playerId=" + encodeURIComponent(mp.playerId))
+      .then(function(res){
+        if (!mp) return;
+        if (!res.ok){ stopMpPolling(); return; }
+        mp.you = res.body.you;
+        mp.opponent = res.body.opponent;
+        mp.food = res.body.food;
+        mp.status = res.body.status;
+        mp.winner = res.body.winner;
+        mp.endReason = res.body.endReason;
+        if (mp.status === "playing" && (state === "mphostwait" || state === "mpresult")){
+          state = "mpplaying";
+          mp.voted = false;
+        }
+        if (mp.status === "ended" && state !== "mpresult"){
+          state = "mpresult";
+          mpSubIndex = 0;
+          mp.voted = false;
+        }
+      });
+  }
+
+  function startHostGame(isPublic){
+    mpFetch("/api/mp/host", {public: isPublic, name: myStoredName("HOST")}).then(function(res){
+      if (!res.ok) return;
+      mp = {
+        code: res.body.code, playerId: res.body.playerId, num: res.body.num, public: isPublic,
+        you: null, opponent: null, food: null, status: "waiting", winner: null, endReason: null, voted: false
+      };
+      state = "mphostwait";
+      startMpPolling();
+    });
+  }
+
+  function refreshPublicRooms(){
+    mpFetch("/api/mp/public").then(function(res){
+      if (res.ok){
+        mpPublicRooms = res.body.rooms || [];
+        if (mpSubIndex >= mpPublicRooms.length) mpSubIndex = 0;
+      }
+    });
+  }
+
+  function enterJoinList(){
+    mpSubIndex = 0;
+    state = "mpjoinlist";
+    refreshPublicRooms();
+    if (mpListTimer) clearInterval(mpListTimer);
+    mpListTimer = setInterval(function(){
+      if (state === "mpjoinlist") refreshPublicRooms();
+      else { clearInterval(mpListTimer); mpListTimer = null; }
+    }, 1500);
+  }
+
+  function joinRoomByCode(code){
+    mpFetch("/api/mp/join", {code: code, name: myStoredName("GUEST")}).then(function(res){
+      if (!res.ok){
+        mpJoinError = res.body && res.body.error === "not_found" ? "NOT FOUND" : "UNAVAILABLE";
+        mpJoinDigits = [];
+        return;
+      }
+      mp = {
+        code: res.body.code, playerId: res.body.playerId, num: res.body.num, public: null,
+        you: null, opponent: null, food: null, status: "playing", winner: null, endReason: null, voted: false
+      };
+      state = "mpplaying";
+      startMpPolling();
+    });
+  }
+
+  function sendMpDirection(d){
+    if (!mp) return;
+    mpFetch("/api/mp/input", {code: mp.code, playerId: mp.playerId, dir: d});
+  }
+
+  function leaveMp(){
+    stopMpPolling();
+    if (mpListTimer){ clearInterval(mpListTimer); mpListTimer = null; }
+    if (mp && mp.code && mp.playerId){
+      mpFetch("/api/mp/leave", {code: mp.code, playerId: mp.playerId});
+    }
+    mp = null;
+  }
+
+  function mpNormalizeKey(key){
+    if (key === "ArrowUp" || key === "w" || key === "W" || key === "2") return "up";
+    if (key === "ArrowDown" || key === "s" || key === "S" || key === "8") return "down";
+    if (key === " " || key === "5" || key === "Enter" || key === "#") return "select";
+    if (key === "*" || key === "Escape") return "back";
+    return null;
+  }
+
+  function handleMpKey(rawKey){
+    if (state === "mpjoincode"){
+      mpJoinError = null;
+      if (rawKey === "*"){
+        if (mpJoinDigits.length) mpJoinDigits.pop();
+        else { state = "mpjoinmenu"; mpSubIndex = 0; }
+        return;
+      }
+      if (rawKey === "Backspace"){ mpJoinDigits.pop(); return; }
+      if (rawKey === "Escape"){ state = "mpjoinmenu"; mpSubIndex = 0; return; }
+      if (/^[0-9]$/.test(rawKey)){
+        if (mpJoinDigits.length < 4) mpJoinDigits.push(rawKey);
+        if (mpJoinDigits.length === 4) joinRoomByCode(mpJoinDigits.join(""));
+      }
+      return;
+    }
+
+    if (state === "mpplaying"){
+      var dir = null;
+      switch(rawKey){
+        case "ArrowUp": case "w": case "W": case "2": dir = {x:0,y:-1}; break;
+        case "ArrowDown": case "s": case "S": case "8": dir = {x:0,y:1}; break;
+        case "ArrowLeft": case "a": case "A": case "4": dir = {x:-1,y:0}; break;
+        case "ArrowRight": case "d": case "D": case "6": dir = {x:1,y:0}; break;
+        case "*": case "Escape": leaveMp(); state = "menu"; return;
+      }
+      if (dir) sendMpDirection(dir);
+      return;
+    }
+
+    var action = mpNormalizeKey(rawKey);
+    if (!action) return;
+
+    if (state === "mpmenu"){
+      var items = ["HOST GAME", "JOIN GAME"];
+      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items.length) % items.length;
+      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items.length;
+      else if (action === "select"){
+        state = mpSubIndex === 0 ? "mphostoptions" : "mpjoinmenu";
+        mpSubIndex = 0;
+      } else if (action === "back"){ state = "menu"; }
+      return;
+    }
+
+    if (state === "mphostoptions"){
+      var items2 = ["PUBLIC", "PRIVATE"];
+      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items2.length) % items2.length;
+      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items2.length;
+      else if (action === "select"){ startHostGame(mpSubIndex === 0); }
+      else if (action === "back"){ state = "mpmenu"; mpSubIndex = 0; }
+      return;
+    }
+
+    if (state === "mphostwait"){
+      if (action === "back"){ leaveMp(); state = "mpmenu"; mpSubIndex = 0; }
+      return;
+    }
+
+    if (state === "mpjoinmenu"){
+      var items3 = ["PUBLIC LIST", "ENTER CODE"];
+      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items3.length) % items3.length;
+      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items3.length;
+      else if (action === "select"){
+        if (mpSubIndex === 0) enterJoinList();
+        else { mpJoinDigits = []; mpJoinError = null; state = "mpjoincode"; }
+      } else if (action === "back"){ state = "mpmenu"; mpSubIndex = 0; }
+      return;
+    }
+
+    if (state === "mpjoinlist"){
+      var n = mpPublicRooms.length;
+      if (action === "up" && n) mpSubIndex = (mpSubIndex - 1 + n) % n;
+      else if (action === "down" && n) mpSubIndex = (mpSubIndex + 1) % n;
+      else if (action === "select" && n){ joinRoomByCode(mpPublicRooms[mpSubIndex].code); }
+      else if (action === "back"){ state = "mpjoinmenu"; mpSubIndex = 0; }
+      return;
+    }
+
+    if (state === "mpresult"){
+      if (mp && mp.voted){
+        if (action === "back"){ leaveMp(); state = "menu"; }
+        return;
+      }
+      var items4 = ["REPLAY", "EXIT"];
+      if (action === "up") mpSubIndex = (mpSubIndex - 1 + items4.length) % items4.length;
+      else if (action === "down") mpSubIndex = (mpSubIndex + 1) % items4.length;
+      else if (action === "select"){
+        if (mpSubIndex === 0){
+          mp.voted = true;
+          mpFetch("/api/mp/replay", {code: mp.code, playerId: mp.playerId});
+        } else { leaveMp(); state = "menu"; }
+      } else if (action === "back"){ leaveMp(); state = "menu"; }
+      return;
+    }
+  }
+
+  function resetGame(){
+    var cx = Math.floor(GRID_W/2), cy = Math.floor(GRID_H/2);
+    snake = [
+      {x:cx-1,y:cy},
+      {x:cx-2,y:cy},
+      {x:cx-3,y:cy}
+    ];
+    dir = {x:1,y:0};
+    dirQueue = [];
+    score = 0;
+    tickMs = 160;
+    acc = 0;
+    justHitHighScore = false;
+    placeFood();
+  }
+
+  function placeFood(){
+    var ok = false, fx, fy;
+    while(!ok){
+      fx = Math.floor(Math.random()*GRID_W);
+      fy = Math.floor(Math.random()*GRID_H);
+      ok = !snake.some(function(s){ return s.x===fx && s.y===fy; });
+    }
+    food = {x:fx, y:fy};
+  }
+
+  function setDirection(nx, ny){
+    // buffer up to 2 pending turns so a fast one-two key combo (e.g.
+    // down then right while moving left) applies over two ticks instead
+    // of being validated only against the currently-moving direction
+    var last = dirQueue.length ? dirQueue[dirQueue.length-1] : dir;
+    if (last.x === nx && last.y === ny) return; // no-op, same as last queued
+    if (snake.length>1 && last.x === -nx && last.y === -ny) return; // would reverse
+    if (dirQueue.length >= 2) return; // buffer full
+    dirQueue.push({x:nx, y:ny});
+  }
+
+  function cornerTurn(a, b){
+    // dual-function corner key: turns toward whichever of the two
+    // perpendicular directions isn't the one already in use
+    var cur = dirQueue.length ? dirQueue[dirQueue.length-1] : dir;
+    function same(v){ return cur.x===v.x && cur.y===v.y; }
+    function reverse(v){ return cur.x===-v.x && cur.y===-v.y; }
+    if (!same(a) && !reverse(a)) setDirection(a.x, a.y);
+    else if (!same(b) && !reverse(b)) setDirection(b.x, b.y);
+  }
+
+  function handleAction(kind){
+    if (state === "menu"){
+      if (kind === "up") menuIndex = (menuIndex - 1 + MENU_ACTIONS.length) % MENU_ACTIONS.length;
+      else if (kind === "down") menuIndex = (menuIndex + 1) % MENU_ACTIONS.length;
+      else if (kind === "action") selectMenuItem();
+      return;
+    }
+    if (state === "highscore" || state === "howto"){
+      if (kind === "action") state = "menu";
+      return;
+    }
+
+    if (kind === "up") setDirection(0,-1);
+    else if (kind === "down") setDirection(0,1);
+    else if (kind === "left") setDirection(-1,0);
+    else if (kind === "right") setDirection(1,0);
+    else if (kind === "action") pressAction();
+    else if (kind === "corner-ul") cornerTurn({x:0,y:-1}, {x:-1,y:0}); // key 1: up/left
+    else if (kind === "corner-dr") cornerTurn({x:0,y:1}, {x:1,y:0});   // key 9: down/right
+  }
+
+  function selectMenuItem(){
+    var action = MENU_ACTIONS[menuIndex];
+    if (action === "play"){
+      resetGame();
+      state = "playing";
+    } else if (action === "multiplayer"){
+      mpSubIndex = 0;
+      state = "mpmenu";
+    } else if (action === "walls"){
+      wallsEnabled = !wallsEnabled;
+    } else if (action === "highscore"){
+      loadLeaderboard();
+      state = "highscore";
+    } else if (action === "howto"){
+      state = "howto";
+    }
+  }
+
+  function pressAction(){
+    if (state === "playing") state = "paused";
+    else if (state === "paused") state = "playing";
+    else if (state === "gameover") state = "menu";
+  }
+
+  function step(){
+    if (dirQueue.length) dir = dirQueue.shift();
+    var head = snake[0];
+    var nx = head.x + dir.x;
+    var ny = head.y + dir.y;
+
+    if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H){
+      if (wallsEnabled) return gameOver();
+      nx = (nx + GRID_W) % GRID_W;
+      ny = (ny + GRID_H) % GRID_H;
+    }
+    for (var i=0;i<snake.length;i++){
+      if (snake[i].x === nx && snake[i].y === ny) return gameOver();
+    }
+
+    snake.unshift({x:nx, y:ny});
+
+    if (nx === food.x && ny === food.y){
+      score += 10;
+      if (score > highScore){
+        highScore = score;
+        justHitHighScore = true;
+        localStorage.setItem(HS_KEY, String(highScore));
+      }
+      tickMs = Math.max(70, 160 - Math.floor(score/50)*4);
+      placeFood();
+    } else {
+      snake.pop();
+    }
+  }
+
+  function gameOver(){
+    if (qualifiesForBoard(score)){
+      startNameEntry();
+    } else {
+      state = "gameover";
+    }
+  }
+
+  // ---------- drawing ----------
+  function clear(){
+    ctx.fillStyle = BG;
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = FG;
+  }
+
+  function drawHud(){
+    ctx.fillStyle = FG;
+    var s = String(score);
+    drawText(ctx, s, 2, 1, FG);
+    var hs = "HI " + highScore;
+    drawText(ctx, hs, W-2-textWidth(hs), 1, FG);
+  }
+
+  function drawBorder(){
+    ctx.fillStyle = FG;
+    ctx.fillRect(0, HUD_H, W, 1);
+    ctx.fillRect(0, H-1, W, 1);
+    ctx.fillRect(0, HUD_H, 1, H-HUD_H);
+    ctx.fillRect(W-1, HUD_H, 1, H-HUD_H);
+  }
+
+  function drawSnake(){
+    ctx.fillStyle = FG;
+    for (var i=0;i<snake.length;i++){
+      var seg = snake[i];
+      var px = OX + seg.x*CELL;
+      var py = OY + seg.y*CELL;
+      ctx.fillRect(px, py, CELL-1, CELL-1);
+    }
+  }
+
+  function drawFood(){
+    ctx.fillStyle = FG;
+    var px = OX + food.x*CELL;
+    var py = OY + food.y*CELL;
+    // small plus/cross so it reads differently from a snake segment
+    ctx.fillRect(px+1, py,   1, 1);
+    ctx.fillRect(px,   py+1, 3, 1);
+    ctx.fillRect(px+1, py+2, 1, 1);
+  }
+
+  function centerText(lines, yStart){
+    ctx.fillStyle = FG;
+    lines.forEach(function(line, idx){
+      var x = Math.floor((W - textWidth(line))/2);
+      drawText(ctx, line, x, yStart + idx*9, FG);
+    });
+  }
+
+  function drawOverlayBox(lines){
+    var lineH = 9;
+    var boxW = Math.max.apply(null, lines.map(textWidth)) + 8;
+    var boxH = lines.length*lineH + 6;
+    var bx = Math.floor((W-boxW)/2);
+    var by = Math.floor((H-boxH)/2);
+    ctx.fillStyle = BG;
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.fillStyle = FG;
+    ctx.fillRect(bx, by, boxW, 1);
+    ctx.fillRect(bx, by+boxH-1, boxW, 1);
+    ctx.fillRect(bx, by, 1, boxH);
+    ctx.fillRect(bx+boxW-1, by, 1, boxH);
+    centerText(lines, by+4);
+  }
+
+  function drawListMenu(title, items, selectedIndex){
+    var lineH = 9;
+    var cursorW = 8;
+    var maxItemW = items.length ? Math.max.apply(null, items.map(textWidth)) : textWidth("NONE");
+    var boxW = Math.max(textWidth(title), cursorW + maxItemW) + 8;
+    var boxH = lineH + 3 + Math.max(items.length, 1)*lineH + 6;
+    var bx = Math.floor((W-boxW)/2);
+    var by = Math.floor((H-boxH)/2);
+
+    ctx.fillStyle = BG;
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.fillStyle = FG;
+    ctx.fillRect(bx, by, boxW, 1);
+    ctx.fillRect(bx, by+boxH-1, boxW, 1);
+    ctx.fillRect(bx, by, 1, boxH);
+    ctx.fillRect(bx+boxW-1, by, 1, boxH);
+
+    drawText(ctx, title, bx + Math.floor((boxW-textWidth(title))/2), by+4, FG);
+
+    var listY = by + 4 + lineH + 3;
+    if (items.length === 0){
+      drawText(ctx, "NONE", bx+4+cursorW, listY, FG);
+    }
+    items.forEach(function(label, i){
+      var ly = listY + i*lineH;
+      if (i === selectedIndex) drawText(ctx, ">", bx+4, ly, FG);
+      drawText(ctx, label, bx+4+cursorW, ly, FG);
+    });
+  }
+
+  function drawMenuBox(){
+    var items = MENU_ACTIONS.map(function(_, i){ return menuLabel(i); });
+    drawListMenu("SNAKE", items, menuIndex);
+  }
+
+  function render(){
+    clear();
+    if (isMpState(state)) drawMpHud(); else drawHud();
+    drawBorder();
+
+    if (state === "menu"){
+      drawSnakeDecor();
+      drawMenuBox();
+    } else if (state === "highscore"){
+      drawHighscoreBox();
+    } else if (state === "howto"){
+      drawOverlayBox(["HOW TO PLAY","2 4 6 8 MOVE","1/9 CORNER TURN","5 PAUSE/SELECT","PRESS 5"]);
+    } else if (state === "playing"){
+      drawSnake();
+      drawFood();
+    } else if (state === "paused"){
+      drawSnake();
+      drawFood();
+      drawOverlayBox(["PAUSED"]);
+    } else if (state === "nameentry"){
+      drawSnake();
+      drawFood();
+      drawNameEntryBox();
+    } else if (state === "gameover"){
+      drawSnake();
+      drawFood();
+      var lines = ["GAME OVER"];
+      if (justHitHighScore) lines.push("NEW HIGH SCORE!");
+      lines.push("PRESS SPACE");
+      drawOverlayBox(lines);
+    } else if (state === "mpmenu"){
+      drawListMenu("MULTIPLAYER", ["HOST GAME","JOIN GAME"], mpSubIndex);
+    } else if (state === "mphostoptions"){
+      drawListMenu("HOST GAME", ["PUBLIC","PRIVATE"], mpSubIndex);
+    } else if (state === "mphostwait"){
+      drawOverlayBox([
+        "CODE " + (mp ? mp.code : "----"),
+        mp && mp.public ? "PUBLIC" : "PRIVATE",
+        "WAITING...",
+        "*=CANCEL"
+      ]);
+    } else if (state === "mpjoinmenu"){
+      drawListMenu("JOIN GAME", ["PUBLIC LIST","ENTER CODE"], mpSubIndex);
+    } else if (state === "mpjoinlist"){
+      var roomItems = mpPublicRooms.map(function(r){ return r.code + " " + r.hostName; });
+      drawListMenu("ROOMS", roomItems, mpSubIndex);
+    } else if (state === "mpjoincode"){
+      var padded = mpJoinDigits.join("") + "_".repeat(4 - mpJoinDigits.length);
+      drawOverlayBox([mpJoinError || "ENTER CODE", padded, "*=DEL/BACK"]);
+    } else if (state === "mpplaying"){
+      drawMpPlaying();
+    } else if (state === "mpresult"){
+      drawMpResult();
+    }
+  }
+
+  function drawMpHud(){
+    ctx.fillStyle = FG;
+    var myScore = (mp && mp.you) ? mp.you.score : 0;
+    drawText(ctx, String(myScore), 2, 1, FG);
+    var label = "OP " + ((mp && mp.opponent) ? mp.opponent.score : 0);
+    drawText(ctx, label, W-2-textWidth(label), 1, FG);
+  }
+
+  function drawMpPlaying(){
+    if (!mp) return;
+    var oppBody = mp.opponent ? mp.opponent.body : [];
+    var myBody = mp.you ? mp.you.body : [];
+    ctx.fillStyle = MID;
+    oppBody.forEach(function(seg){
+      ctx.fillRect(OX+seg[0]*CELL, OY+seg[1]*CELL, CELL-1, CELL-1);
+    });
+    ctx.fillStyle = FG;
+    myBody.forEach(function(seg){
+      ctx.fillRect(OX+seg[0]*CELL, OY+seg[1]*CELL, CELL-1, CELL-1);
+    });
+    if (mp.food){
+      var px = OX + mp.food[0]*CELL, py = OY + mp.food[1]*CELL;
+      ctx.fillRect(px+1, py,   1, 1);
+      ctx.fillRect(px,   py+1, 3, 1);
+      ctx.fillRect(px+1, py+2, 1, 1);
+    }
+  }
+
+  function drawMpResult(){
+    var title;
+    if (!mp || !mp.opponent) title = "OPPONENT LEFT";
+    else if (mp.winner === "you") title = "YOU WIN!";
+    else if (mp.winner === "opponent") title = "YOU LOSE";
+    else title = "DRAW";
+
+    var myScore = (mp && mp.you) ? mp.you.score : 0;
+    var oppScore = (mp && mp.opponent) ? mp.opponent.score : 0;
+    var lines = [title, "YOU " + myScore, "OPP " + oppScore];
+
+    if (!mp || !mp.opponent){
+      lines.push("PRESS 5");
+    } else if (mp.voted){
+      lines.push("WAITING...");
+    } else {
+      var items = ["REPLAY","EXIT"];
+      items.forEach(function(label, i){
+        lines.push((i === mpSubIndex ? "> " : "  ") + label);
+      });
+    }
+    drawOverlayBox(lines);
+  }
+
+  function drawHighscoreBox(){
+    if (!leaderboardAvailable){
+      drawOverlayBox(["HIGH SCORE","SERVER OFFLINE","PRESS 5"]);
+      return;
+    }
+    var lines = [];
+    if (leaderboard.length === 0){
+      lines.push("NO SCORES YET");
+    } else {
+      leaderboard.forEach(function(e){
+        lines.push(e.name + " " + e.score);
+      });
+    }
+    lines.push("PRESS 5");
+    drawOverlayBox(lines);
+  }
+
+  function drawNameEntryBox(){
+    var padded = nameEntry.chars.join("") + "_".repeat(8 - nameEntry.chars.length);
+    var lines = [
+      nameEntry.error || "TOP 5 SCORE!",
+      padded,
+      "0=SPACE",
+      "*DEL #OK"
+    ];
+    drawOverlayBox(lines);
+  }
+
+  function drawSnakeDecor(){
+    // idle wiggle preview on the start screen
+    ctx.fillStyle = FG;
+    var y = 3;
+    for (var i=0;i<6;i++){
+      ctx.fillRect(OX+4+i*CELL, OY + y*CELL, CELL-1, CELL-1);
+    }
+  }
+
+  // ---------- main loop ----------
+  function loop(ts){
+    if (lastTime == null) lastTime = ts;
+    var dt = ts - lastTime;
+    lastTime = ts;
+
+    if (state === "playing"){
+      acc += dt;
+      while (acc >= tickMs){
+        step();
+        acc -= tickMs;
+        if (state !== "playing") { acc = 0; break; }
+      }
+    }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- input ----------
+  window.addEventListener("keydown", function(e){
+    if (state === "nameentry"){
+      nameEntryKey(e.key);
+      e.preventDefault();
+      return;
+    }
+    if (isMpState(state)){
+      handleMpKey(e.key);
+      e.preventDefault();
+      return;
+    }
+    switch(e.key){
+      case "ArrowUp": case "w": case "W": handleAction("up"); e.preventDefault(); break;
+      case "ArrowDown": case "s": case "S": handleAction("down"); e.preventDefault(); break;
+      case "ArrowLeft": case "a": case "A": handleAction("left"); e.preventDefault(); break;
+      case "ArrowRight": case "d": case "D": handleAction("right"); e.preventDefault(); break;
+      case " ": case "5": case "Enter": handleAction("action"); e.preventDefault(); break;
+      case "2": handleAction("up"); e.preventDefault(); break;
+      case "8": handleAction("down"); e.preventDefault(); break;
+      case "4": handleAction("left"); e.preventDefault(); break;
+      case "6": handleAction("right"); e.preventDefault(); break;
+      case "1": handleAction("corner-ul"); e.preventDefault(); break;
+      case "9": handleAction("corner-dr"); e.preventDefault(); break;
+    }
+  });
+
+  document.querySelectorAll(".key").forEach(function(btn){
+    var action = btn.getAttribute("data-action");
+    var digit = btn.getAttribute("data-digit");
+    btn.addEventListener("click", function(){
+      if (state === "nameentry"){
+        nameEntryKey(digit);
+        return;
+      }
+      if (isMpState(state)){
+        handleMpKey(digit);
+        return;
+      }
+      if (action) handleAction(action);
+    });
+  });
+
+  canvas.addEventListener("click", function(){
+    if (state !== "playing") handleAction("action");
+  });
+
+  // swipe support
+  var touchStart = null;
+  canvas.addEventListener("touchstart", function(e){
+    var t = e.changedTouches[0];
+    touchStart = {x:t.clientX, y:t.clientY};
+  }, {passive:true});
+  canvas.addEventListener("touchend", function(e){
+    if (!touchStart) return;
+    var t = e.changedTouches[0];
+    var dx = t.clientX - touchStart.x;
+    var dy = t.clientY - touchStart.y;
+    if (Math.abs(dx) < 12 && Math.abs(dy) < 12){
+      if (state !== "playing") handleAction("action");
+      touchStart = null;
+      return;
+    }
+    if (Math.abs(dx) > Math.abs(dy)){
+      handleAction(dx > 0 ? "right" : "left");
+    } else {
+      handleAction(dy > 0 ? "down" : "up");
+    }
+    touchStart = null;
+  }, {passive:true});
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

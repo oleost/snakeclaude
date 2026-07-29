@@ -1,0 +1,7 @@
+.git
+.gitignore
+.claude
+highscores.json
+Screenshot*.png
+__pycache__
+*.pyc

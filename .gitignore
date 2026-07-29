@@ -1,0 +1,5 @@
+highscores.json
+__pycache__/
+*.pyc
+Screenshot*.png
+.claude/
