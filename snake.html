@@ -353,10 +353,8 @@
   }
 
   function loadLeaderboard(){
-    fetch("/api/highscores").then(function(r){ return r.json(); }).then(function(body){
-      leaderboard = body.entries || [];
-      leaderboardDate = body.date;
-      leaderboardAvailable = true;
+    wsConnect().then(function(){
+      wsSend({type: "getHighscores"});
     }).catch(function(){ leaderboardAvailable = false; });
   }
   loadLeaderboard();
@@ -431,22 +429,8 @@
       return;
     }
     localStorage.setItem("snakePlayerName", name);
-    fetch("/api/highscores", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({name: name, score: pendingScore, clientId: getClientId()})
-    }).then(function(r){
-      return r.json().then(function(body){ return {ok: r.ok, body: body}; });
-    }).then(function(res){
-      if (res.ok){
-        leaderboard = res.body.entries || [];
-        leaderboardDate = res.body.date;
-        state = "gameover";
-      } else if (res.body && res.body.error === "profanity"){
-        nameEntry.error = "NOT ALLOWED";
-      } else {
-        nameEntry.error = "INVALID NAME";
-      }
+    wsConnect().then(function(){
+      wsSend({type: "submitHighscore", name: name, score: pendingScore, clientId: getClientId()});
     }).catch(function(){
       state = "gameover"; // offline - just skip saving
     });
@@ -469,13 +453,14 @@
     ];
   }
 
-  // ---------- multiplayer ----------
-  // A single persistent WebSocket connection per match. The server pushes a
-  // fresh state message the instant anything changes (every tick during
-  // play, immediately on join/replay/disconnect) - there is no polling and
-  // no client-side clock to keep in sync, so there is nothing to drift.
-  var MP_WS_PORT = 8935;
-  var mpWs = null;
+  // ---------- server connection (highscores + multiplayer) ----------
+  // One persistent WebSocket, opened lazily on first need and kept open for
+  // the rest of the session, used for both the daily highscore board and
+  // 1v1 multiplayer. For multiplayer the server pushes a fresh state
+  // message the instant anything changes (every tick during play,
+  // immediately on join/replay/disconnect) - there is no polling and no
+  // client-side clock to keep in sync, so there is nothing to drift.
+  var ws = null;
   var mp = null;              // active room session, or null
   var mpSubIndex = 0;         // shared selection index for the small mp menus
   var mpJoinDigits = [];
@@ -489,23 +474,24 @@
     return (localStorage.getItem("snakePlayerName") || fallback).toUpperCase().slice(0, 8);
   }
 
-  function mpConnect(){
-    if (mpWs && mpWs.readyState === WebSocket.OPEN) return Promise.resolve(mpWs);
+  function wsConnect(){
+    if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve(ws);
     return new Promise(function(resolve, reject){
-      var url = "ws://" + location.hostname + ":" + MP_WS_PORT + "/";
-      var ws = new WebSocket(url);
+      var proto = location.protocol === "https:" ? "wss://" : "ws://";
+      var sock = new WebSocket(proto + location.host + "/");
       var settled = false;
-      ws.onopen = function(){
+      sock.onopen = function(){
         settled = true;
-        mpWs = ws;
-        resolve(ws);
+        ws = sock;
+        resolve(sock);
       };
-      ws.onerror = function(){
+      sock.onerror = function(){
         if (!settled){ settled = true; reject(new Error("ws error")); }
       };
-      ws.onclose = function(){
+      sock.onclose = function(){
         if (!settled){ settled = true; reject(new Error("ws closed")); return; }
-        mpWs = null;
+        ws = null;
+        leaderboardAvailable = false;
         if (isMpState(state)){
           // connection dropped mid-session - no reconnect support yet,
           // just bail back to the menu rather than sit on a dead screen
@@ -513,20 +499,29 @@
           state = "menu";
         }
       };
-      ws.onmessage = function(ev){
+      sock.onmessage = function(ev){
         var msg;
         try { msg = JSON.parse(ev.data); } catch(e){ return; }
-        handleMpMessage(msg);
+        handleWsMessage(msg);
       };
     });
   }
 
-  function mpSend(obj){
-    if (mpWs && mpWs.readyState === WebSocket.OPEN) mpWs.send(JSON.stringify(obj));
+  function wsSend(obj){
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
 
-  function handleMpMessage(msg){
-    if (msg.type === "hosted"){
+  function handleWsMessage(msg){
+    if (msg.type === "highscores"){
+      leaderboard = msg.entries || [];
+      leaderboardDate = msg.date;
+      leaderboardAvailable = true;
+      if (state === "nameentry") state = "gameover"; // just-submitted score was accepted
+    } else if (msg.type === "highscoreError"){
+      if (state === "nameentry" && nameEntry){
+        nameEntry.error = msg.error === "profanity" ? "NOT ALLOWED" : "INVALID NAME";
+      }
+    } else if (msg.type === "hosted"){
       mp = {
         code: msg.code, public: msg.public,
         you: null, opponent: null, food: null, status: "waiting", winner: null, endReason: null, voted: false
@@ -568,27 +563,27 @@
   }
 
   function startHostGame(isPublic){
-    mpConnect().then(function(){
-      mpSend({type: "host", public: isPublic, name: myStoredName("HOST")});
+    wsConnect().then(function(){
+      wsSend({type: "host", public: isPublic, name: myStoredName("HOST")});
     }).catch(function(){});
   }
 
   function enterJoinList(){
     mpSubIndex = 0;
     state = "mpjoinlist";
-    mpConnect().then(function(){
-      mpSend({type: "listPublic"});
+    wsConnect().then(function(){
+      wsSend({type: "listPublic"});
       if (mpListTimer) clearInterval(mpListTimer);
       mpListTimer = setInterval(function(){
-        if (state === "mpjoinlist") mpSend({type: "listPublic"});
+        if (state === "mpjoinlist") wsSend({type: "listPublic"});
         else { clearInterval(mpListTimer); mpListTimer = null; }
       }, 1500);
     }).catch(function(){});
   }
 
   function joinRoomByCode(code){
-    mpConnect().then(function(){
-      mpSend({type: "join", code: code, name: myStoredName("GUEST")});
+    wsConnect().then(function(){
+      wsSend({type: "join", code: code, name: myStoredName("GUEST")});
     }).catch(function(){
       mpJoinError = "UNAVAILABLE";
       mpJoinDigits = [];
@@ -596,15 +591,12 @@
   }
 
   function sendMpDirection(d){
-    mpSend({type: "input", dir: d});
+    wsSend({type: "input", dir: d});
   }
 
   function leaveMp(){
     if (mpListTimer){ clearInterval(mpListTimer); mpListTimer = null; }
-    if (mpWs){
-      try { mpSend({type: "leave"}); mpWs.close(); } catch(e){}
-      mpWs = null;
-    }
+    wsSend({type: "leaveRoom"});
     mp = null;
   }
 
@@ -705,7 +697,7 @@
       else if (action === "select"){
         if (mpSubIndex === 0){
           mp.voted = true;
-          mpSend({type: "replay"});
+          wsSend({type: "replay"});
         } else { leaveMp(); state = "menu"; }
       } else if (action === "back"){ leaveMp(); state = "menu"; }
       return;

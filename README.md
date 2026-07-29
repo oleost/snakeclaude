@@ -23,15 +23,15 @@ highscore board and multiplayer need the server running.
 docker compose up -d --build
 ```
 
-This builds the image and starts the server on ports 8934 (game + highscore
-API) and 8935 (multiplayer WebSocket), with the daily highscore file
-persisted in a named volume (`snake-data`) so it survives container
-rebuilds/restarts.
+This builds the image and starts the server on a single port (8934) -
+static files, the highscore API, and multiplayer all share it, so exposing
+this one port (directly, or through a reverse proxy / Cloudflare Tunnel) is
+enough for the whole thing to work. The daily highscore file is persisted
+in a named volume (`snake-data`) so it survives container rebuilds/restarts.
 
-Environment variables (all optional, set in `docker-compose.yml`):
+Environment variables (both optional, set in `docker-compose.yml`):
 
-- `SNAKE_PORT` - HTTP port to listen on (default `8934`)
-- `SNAKE_WS_PORT` - multiplayer WebSocket port (default `8935`)
+- `SNAKE_PORT` - port to listen on (default `8934`)
 - `SNAKE_DATA_FILE` - path to the highscore JSON file (default `/data/highscores.json` in the container)
 
 The server sends `Cache-Control: no-cache` on every response, so a normal
@@ -58,6 +58,29 @@ The page disables pinch/double-tap zoom and lays out full-height on a
 phone screen (screen near the top, keypad near the bottom, with a
 flexible gap between them) rather than sitting shrink-wrapped in the
 middle of the viewport.
+
+## Exposing it externally (e.g. via Cloudflare Tunnel)
+
+Everything - static files, highscores, and multiplayer - is served on the
+one port above, specifically so that a single reverse-proxy hostname is
+enough; there's no second port to separately expose for multiplayer to
+work. The client connects to its WebSocket using the same host and
+protocol the page itself was loaded with (`wss://` when the page is
+`https://`, `ws://` when it's plain `http://`), so anything that proxies
+plain HTTP transparently proxies the multiplayer traffic too.
+
+To add it to an existing Cloudflare Tunnel (Zero Trust dashboard →
+Networks → Tunnels → your tunnel → Public Hostname → Add a public
+hostname):
+
+- Subdomain: `snake` (or whatever you want, e.g. gives `snake.yourdomain.tld`)
+- Service type: HTTP
+- URL: whatever address/port your other locally-tunneled apps use to reach
+  this box, with port `8934` (e.g. the container's or host's LAN address -
+  match however your other `*.yourdomain.tld` entries are configured)
+
+Save, and the DNS record is created automatically. No separate hostname or
+port is needed for multiplayer.
 
 ## Multiplayer
 

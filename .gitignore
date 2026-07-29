@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 Screenshot*.png
 *eksempel*.png
+claudeflare.png
 .claude/

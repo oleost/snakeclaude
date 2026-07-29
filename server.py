@@ -4,19 +4,22 @@ Snake highscore + multiplayer server.
 Run:  python server.py
 Then open http://localhost:8934/snake.html
 
-Two independent servers run in this one process:
-  - a plain HTTP server (port SNAKE_PORT, default 8934) serving snake.html
-    and the daily highscore JSON API - unchanged, simple request/response.
-  - a WebSocket server (port SNAKE_WS_PORT, default 8935) that handles
-    everything for 1v1 multiplayer (host/join by 4-digit code or public
-    lobby list).
+Everything - static files, the daily highscore board, and 1v1 multiplayer -
+is served on a single port (SNAKE_PORT, default 8934) over one asyncio
+websockets server. Plain HTTP GETs (for snake.html and other static
+assets) are answered directly via a process_request hook before the
+WebSocket handshake would even start; highscores and multiplayer are both
+handled as WebSocket messages on the same connection. One port means one
+Cloudflare Tunnel (or any reverse proxy) hostname is enough to expose the
+whole thing - WebSocket-over-HTTPS is proxied transparently by anything
+that already proxies plain HTTP.
 
 Multiplayer is server-authoritative and push-based: an asyncio task
 advances every active match on its own schedule using time.monotonic()
 as the single clock, and immediately pushes the new state to both
-players' open WebSocket connections the moment anything changes -
-there is no polling, so there is nothing for a client clock to drift
-out of phase with.
+players' open WebSocket connections the moment anything changes - there
+is no polling, so there is nothing for a client clock to drift out of
+phase with.
 
 Match rules: both snakes start in the middle heading away from each
 other. Any crash - wall, your own body, the opponent's body, or a
@@ -28,20 +31,21 @@ pick "replay" before a new round starts.
 """
 
 import asyncio
-import http.server
 import json
+import mimetypes
 import os
 import random
 import re
-import threading
 import time
 from datetime import date
 
 import websockets
+from websockets.datastructures import Headers
+from websockets.http11 import Response
 
 PORT = int(os.environ.get("SNAKE_PORT", "8934"))
-WS_PORT = int(os.environ.get("SNAKE_WS_PORT", "8935"))
-DATA_FILE = os.environ.get("SNAKE_DATA_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "highscores.json")
+STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.environ.get("SNAKE_DATA_FILE") or os.path.join(STATIC_DIR, "highscores.json")
 MAX_ENTRIES = 5
 MAX_NAME_LEN = 8
 
@@ -74,54 +78,50 @@ def sanitize_name(raw):
 
 
 # ---------- daily highscore board ----------
-HS_LOCK = threading.RLock()
-
-
+# Runs on the same single-threaded asyncio loop as everything else, so no
+# lock is needed here any more than anywhere else in this file.
 def load_board():
-    with HS_LOCK:
-        today = str(date.today())
-        data = None
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                data = None
-        if not data or data.get("date") != today:
-            data = {"date": today, "entries": []}
-            save_board(data)
-        return data
+    today = str(date.today())
+    data = None
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            data = None
+    if not data or data.get("date") != today:
+        data = {"date": today, "entries": []}
+        save_board(data)
+    return data
 
 
 def save_board(data):
-    with HS_LOCK:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
 
 
 def public_entries(entries):
     return [{"name": e["name"], "score": e["score"]} for e in entries]
 
 
-def add_entry(client_id, name, score):
-    with HS_LOCK:
-        data = load_board()
-        entries = data["entries"]
+def add_highscore(client_id, name, score):
+    data = load_board()
+    entries = data["entries"]
 
-        existing = None
-        if client_id:
-            existing = next((e for e in entries if e.get("clientId") == client_id), None)
+    existing = None
+    if client_id:
+        existing = next((e for e in entries if e.get("clientId") == client_id), None)
 
-        if existing:
-            if score <= existing["score"]:
-                return data  # not an improvement, keep the old one
-            entries.remove(existing)
+    if existing:
+        if score <= existing["score"]:
+            return data  # not an improvement, keep the old one
+        entries.remove(existing)
 
-        entries.append({"clientId": client_id, "name": name, "score": score, "ts": time.time()})
-        entries.sort(key=lambda e: (-e["score"], e["ts"]))
-        data["entries"] = entries[:MAX_ENTRIES]
-        save_board(data)
-        return data
+    entries.append({"clientId": client_id, "name": name, "score": score, "ts": time.time()})
+    entries.sort(key=lambda e: (-e["score"], e["ts"]))
+    data["entries"] = entries[:MAX_ENTRIES]
+    save_board(data)
+    return data
 
 
 # ---------- multiplayer (asyncio + websockets, single event loop) ----------
@@ -342,6 +342,7 @@ async def game_loop():
         await asyncio.sleep(0.02)
 
 
+# ---------- one WebSocket connection handles highscores AND multiplayer ----------
 async def ws_handler(websocket):
     room = None
     num = None
@@ -353,7 +354,33 @@ async def ws_handler(websocket):
                 continue
             mtype = msg.get("type")
 
-            if mtype == "host":
+            if mtype == "getHighscores":
+                data = load_board()
+                await websocket.send(json.dumps({
+                    "type": "highscores", "date": data["date"], "entries": public_entries(data["entries"])
+                }))
+
+            elif mtype == "submitHighscore":
+                score = msg.get("score")
+                if not isinstance(score, (int, float)) or score <= 0:
+                    await websocket.send(json.dumps({"type": "highscoreError", "error": "invalid_score"}))
+                    continue
+                name = sanitize_name(msg.get("name", ""))
+                if not name:
+                    await websocket.send(json.dumps({"type": "highscoreError", "error": "invalid_name"}))
+                    continue
+                if contains_bad_word(name):
+                    await websocket.send(json.dumps({"type": "highscoreError", "error": "profanity"}))
+                    continue
+                client_id = msg.get("clientId")
+                if not isinstance(client_id, str) or not (0 < len(client_id) <= 64):
+                    client_id = None
+                data = add_highscore(client_id, name, int(score))
+                await websocket.send(json.dumps({
+                    "type": "highscores", "date": data["date"], "entries": public_entries(data["entries"])
+                }))
+
+            elif mtype == "host":
                 name = sanitize_name(msg.get("name", "")) or "HOST"
                 if contains_bad_word(name):
                     await websocket.send(json.dumps({"type": "error", "message": "profanity"}))
@@ -399,8 +426,11 @@ async def ws_handler(websocket):
                         reset_for_replay(room)
                     await broadcast(room)
 
-            elif mtype == "leave":
-                break
+            elif mtype == "leaveRoom":
+                if room is not None and num is not None:
+                    await handle_disconnect(room, num)
+                room = None
+                num = None
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -408,78 +438,52 @@ async def ws_handler(websocket):
             await handle_disconnect(room, num)
 
 
-async def ws_main():
-    async with websockets.serve(ws_handler, "0.0.0.0", WS_PORT, ping_interval=15, ping_timeout=15):
-        print("Multiplayer WebSocket on ws://0.0.0.0:%d/" % WS_PORT)
+# ---------- static file serving (plain GET, answered before any WS handshake) ----------
+def http_response(status, reason, body, content_type="text/plain; charset=utf-8"):
+    body_bytes = body if isinstance(body, bytes) else body.encode("utf-8")
+    headers = Headers()
+    headers["Content-Type"] = content_type
+    headers["Content-Length"] = str(len(body_bytes))
+    # this project gets redeployed often - never let a browser (mobile
+    # Safari/Chrome especially) hang on to a stale snake.html after an update
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    headers["Pragma"] = "no-cache"
+    headers["Expires"] = "0"
+    return Response(status, reason, headers, body_bytes)
+
+
+async def process_request(connection, request):
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return None  # let the WebSocket handshake proceed as normal
+
+    path = request.path.split("?", 1)[0]
+    if path == "/":
+        path = "/snake.html"
+
+    # keep the request confined to this folder - no "..", no absolute paths
+    rel_path = path.lstrip("/")
+    full_path = os.path.normpath(os.path.join(STATIC_DIR, rel_path))
+    if not (full_path == STATIC_DIR or full_path.startswith(STATIC_DIR + os.sep)):
+        return http_response(403, "Forbidden", "forbidden")
+
+    if not os.path.isfile(full_path):
+        return http_response(404, "Not Found", "not found")
+
+    with open(full_path, "rb") as f:
+        body = f.read()
+    content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
+    return http_response(200, "OK", body, content_type)
+
+
+async def main():
+    async with websockets.serve(
+        ws_handler, "0.0.0.0", PORT,
+        process_request=process_request,
+        ping_interval=15, ping_timeout=15,
+    ):
+        print("Serving Snake on http://0.0.0.0:%d/snake.html" % PORT)
         await game_loop()
 
 
-# ---------- static file + highscore HTTP server (unchanged transport) ----------
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def end_headers(self):
-        # this project gets redeployed often - never let a browser (mobile
-        # Safari/Chrome especially) hang on to a stale snake.html or API
-        # response after an update
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        super().end_headers()
-
-    def send_json(self, code, obj):
-        body = json.dumps(obj).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def read_json_body(self):
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        raw = self.rfile.read(length) if length else b""
-        try:
-            return json.loads(raw or b"{}")
-        except json.JSONDecodeError:
-            return {}
-
-    def do_GET(self):
-        if self.path == "/api/highscores":
-            data = load_board()
-            return self.send_json(200, {"date": data["date"], "entries": public_entries(data["entries"])})
-        super().do_GET()
-
-    def do_POST(self):
-        if self.path != "/api/highscores":
-            self.send_error(404)
-            return
-        payload = self.read_json_body()
-        score = payload.get("score")
-        if not isinstance(score, (int, float)) or score <= 0:
-            return self.send_json(400, {"error": "invalid_score"})
-
-        name = sanitize_name(payload.get("name", ""))
-        if not name:
-            return self.send_json(400, {"error": "invalid_name"})
-        if contains_bad_word(name):
-            return self.send_json(400, {"error": "profanity"})
-
-        client_id = payload.get("clientId")
-        if not isinstance(client_id, str) or not (0 < len(client_id) <= 64):
-            client_id = None
-
-        data = add_entry(client_id, name, int(score))
-        return self.send_json(200, {"date": data["date"], "entries": public_entries(data["entries"])})
-
-    def log_message(self, fmt, *args):
-        pass
-
-
-def run_http_server():
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    with http.server.ThreadingHTTPServer(("", PORT), Handler) as httpd:
-        print("Serving Snake on http://0.0.0.0:%d/snake.html" % PORT)
-        httpd.serve_forever()
-
-
 if __name__ == "__main__":
-    threading.Thread(target=run_http_server, daemon=True).start()
-    asyncio.run(ws_main())
+    asyncio.run(main())
