@@ -164,11 +164,35 @@ def spawn_snake(side):
 
 def place_food(room):
     occupied = {tuple(p) for p in room["snakes"][1]["body"]} | {tuple(p) for p in room["snakes"][2]["body"]}
-    while True:
+    h1, h2 = room["snakes"][1]["body"][0], room["snakes"][2]["body"][0]
+
+    # try a bunch of random cells and keep the one closest to equidistant
+    # from both heads (Manhattan distance), so food doesn't keep favoring
+    # whoever happens to be nearer - a plain random pick can land right
+    # next to one player and across the map from the other.
+    def diff_at(fx, fy):
+        d1 = abs(fx - h1[0]) + abs(fy - h1[1])
+        d2 = abs(fx - h2[0]) + abs(fy - h2[1])
+        return abs(d1 - d2)
+
+    best, best_diff = None, None
+    for _ in range(60):
         fx, fy = random.randrange(MP_GRID_W), random.randrange(MP_GRID_H)
-        if (fx, fy) not in occupied:
-            room["food"] = [fx, fy]
-            return
+        if (fx, fy) in occupied:
+            continue
+        diff = diff_at(fx, fy)
+        if best_diff is None or diff < best_diff:
+            best, best_diff = (fx, fy), diff
+        if best_diff <= 1:
+            break
+
+    if best is None:
+        # fallback for a near-full grid where 60 random tries all missed -
+        # scan every free cell so this always terminates with a placement
+        free = [(x, y) for x in range(MP_GRID_W) for y in range(MP_GRID_H) if (x, y) not in occupied]
+        best = min(free, key=lambda p: diff_at(*p))
+
+    room["food"] = list(best)
 
 
 def decide_winner(score1, score2):
