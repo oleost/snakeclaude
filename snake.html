@@ -94,13 +94,19 @@
     touch-action: manipulation;
   }
 
+  /* Nokia 3210-style cluster: a tall C/back pill and a tall OK pill, with
+     up/down grouped as their own smaller stacked pair - spread across the
+     full phone width (space-between) instead of huddled in the middle */
   .dpad{
-    display:grid;
-    grid-template-columns:50px 50px 42px;
-    grid-template-rows:38px 38px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin:14px 0 0;
+  }
+  .dpad-updown{
+    display:flex;
+    flex-direction:column;
     gap:8px;
-    justify-content:center;
-    margin:12px auto 0;
   }
   .dbtn{
     display:flex;
@@ -122,12 +128,21 @@
       0 1px 0 rgba(0,0,0,0.45),
       inset 0 1px 0 rgba(255,255,255,0.15);
   }
-  /* Nokia 3210-style cluster: a tall C/back pill and a tall OK pill side by
-     side, with up/down grouped as their own smaller stacked pair to the right */
-  .dbtn-back{ grid-column:1; grid-row:1 / span 2; font-size:11px; font-weight:700; border-radius:24px; }
-  .dbtn-ok{ grid-column:2; grid-row:1 / span 2; background:linear-gradient(160deg,#8a9a72,#5c6a4c); font-size:12px; font-weight:700; border-radius:24px; }
-  .dbtn-up{ grid-column:3; grid-row:1; font-size:16px; border-radius:9px 9px 4px 4px; }
-  .dbtn-down{ grid-column:3; grid-row:2; font-size:16px; border-radius:4px 4px 9px 9px; }
+  .dbtn-back, .dbtn-ok{
+    width:60px;
+    height:84px;
+    border-radius:28px;
+    font-size:12px;
+    font-weight:700;
+  }
+  .dbtn-ok{ background:linear-gradient(160deg,#8a9a72,#5c6a4c); }
+  .dbtn-up, .dbtn-down{
+    width:48px;
+    height:38px;
+    font-size:16px;
+  }
+  .dbtn-up{ border-radius:9px 9px 4px 4px; }
+  .dbtn-down{ border-radius:4px 4px 9px 9px; }
 
   .keypad{
     position:relative;
@@ -202,10 +217,12 @@
     </div>
 
     <div class="dpad">
-      <button class="dbtn dbtn-up" data-key="ArrowUp">&#9650;</button>
       <button class="dbtn dbtn-back" data-key="*">BACK</button>
       <button class="dbtn dbtn-ok" data-key="Enter">OK</button>
-      <button class="dbtn dbtn-down" data-key="ArrowDown">&#9660;</button>
+      <div class="dpad-updown">
+        <button class="dbtn dbtn-up" data-key="ArrowUp">&#9650;</button>
+        <button class="dbtn dbtn-down" data-key="ArrowDown">&#9660;</button>
+      </div>
     </div>
 
     <div class="keypad">
