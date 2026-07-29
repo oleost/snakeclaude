@@ -90,23 +90,13 @@
     touch-action: manipulation;
   }
 
-  .hint{
-    text-align:center;
-    color:#dfe3e6;
-    font-size:10px;
-    letter-spacing:0.5px;
-    margin-top:10px;
-    opacity:0.85;
-  }
-
   .dpad{
     display:grid;
-    grid-template-columns:repeat(3, 40px);
+    grid-template-columns:40px 40px;
     grid-template-rows:repeat(3, 40px);
     gap:6px;
-    align-self:center;
-    margin-top:auto;
-    margin-bottom:auto;
+    justify-content:center;
+    margin:12px auto 0;
   }
   .dbtn{
     display:flex;
@@ -129,11 +119,11 @@
       0 1px 0 rgba(0,0,0,0.45),
       inset 0 1px 0 rgba(255,255,255,0.15);
   }
+  /* Nokia 3210-style cluster: up/ok/down rocker with a C/back key to its left */
   .dbtn-up{ grid-column:2; grid-row:1; }
-  .dbtn-left{ grid-column:1; grid-row:2; }
   .dbtn-ok{ grid-column:2; grid-row:2; background:linear-gradient(160deg,#8a9a72,#5c6a4c); font-size:11px; font-weight:700; }
-  .dbtn-right{ grid-column:3; grid-row:2; }
   .dbtn-down{ grid-column:2; grid-row:3; }
+  .dbtn-back{ grid-column:1; grid-row:2; font-size:9px; font-weight:700; }
 
   .keypad{
     position:relative;
@@ -141,7 +131,7 @@
     grid-template-columns:repeat(3, 1fr);
     gap:8px;
     padding-top:16px;
-    margin-top:16px;
+    margin-top:auto;
   }
 
   /* invisible, oversized tap targets for corner-turn (keys 1 and 9) -
@@ -207,13 +197,10 @@
       <canvas id="game" width="98" height="74"></canvas>
     </div>
 
-    <div class="hint">2·4·6·8 = MOVE &nbsp; 1/9 = CORNER TURN &nbsp; 5 = START/PAUSE</div>
-
     <div class="dpad">
       <button class="dbtn dbtn-up" data-key="ArrowUp">&#9650;</button>
-      <button class="dbtn dbtn-left" data-key="ArrowLeft">&#9664;</button>
+      <button class="dbtn dbtn-back" data-key="*">BACK</button>
       <button class="dbtn dbtn-ok" data-key="Enter">OK</button>
-      <button class="dbtn dbtn-right" data-key="ArrowRight">&#9654;</button>
       <button class="dbtn dbtn-down" data-key="ArrowDown">&#9660;</button>
     </div>
 
@@ -342,7 +329,7 @@
   // mpmenu | mphostoptions | mphostwait | mpjoinmenu | mpjoinlist | mpjoincode | mpplaying | mpresult
   var wallsEnabled = true; // classic mode: hitting the border ends the run
   var menuIndex = 0;
-  var MENU_ACTIONS = ["play", "multiplayer", "walls", "options", "highscore", "howto"];
+  var MENU_ACTIONS = ["play", "multiplayer", "options", "highscore", "howto"];
   var optionsIndex = 0;
   var bigCornerButtons = localStorage.getItem("snakeBigCorner") === "1";
   var snake, dir, dirQueue, food, score, tickMs, acc, lastTime, justHitHighScore;
@@ -469,11 +456,17 @@
     switch(MENU_ACTIONS[i]){
       case "play": return "PLAY";
       case "multiplayer": return "MULTIPLAYER";
-      case "walls": return "WALLS " + (wallsEnabled ? "ON" : "OFF");
       case "options": return "OPTIONS";
       case "highscore": return "HIGH SCORE";
       case "howto": return "HOW TO PLAY";
     }
+  }
+
+  function optionsItems(){
+    return [
+      "WALLS " + (wallsEnabled ? "ON" : "OFF"),
+      "BIG CORNER " + (bigCornerButtons ? "ON" : "OFF")
+    ];
   }
 
   // ---------- multiplayer ----------
@@ -778,11 +771,13 @@
       return;
     }
     if (state === "options"){
-      var optItems = ["BIG CORNER " + (bigCornerButtons ? "ON" : "OFF")];
+      var optItems = optionsItems();
       if (kind === "up") optionsIndex = (optionsIndex - 1 + optItems.length) % optItems.length;
       else if (kind === "down") optionsIndex = (optionsIndex + 1) % optItems.length;
       else if (kind === "action"){
         if (optionsIndex === 0){
+          wallsEnabled = !wallsEnabled;
+        } else if (optionsIndex === 1){
           bigCornerButtons = !bigCornerButtons;
           localStorage.setItem("snakeBigCorner", bigCornerButtons ? "1" : "0");
         }
@@ -809,8 +804,6 @@
     } else if (action === "multiplayer"){
       mpSubIndex = 0;
       state = "mpmenu";
-    } else if (action === "walls"){
-      wallsEnabled = !wallsEnabled;
     } else if (action === "options"){
       optionsIndex = 0;
       state = "options";
@@ -980,9 +973,9 @@
     } else if (state === "highscore"){
       drawHighscoreBox();
     } else if (state === "howto"){
-      drawOverlayBox(["HOW TO PLAY","2 4 6 8 MOVE","1/9 CORNER TURN","5 PAUSE/SELECT","PRESS 5"]);
+      drawOverlayBox(["HOW TO PLAY","2 4 6 8 MOVE","1/9 CORNER TURN","OK PAUSE/SELECT","PRESS OK"]);
     } else if (state === "options"){
-      drawListMenu("OPTIONS", ["BIG CORNER " + (bigCornerButtons ? "ON" : "OFF")], optionsIndex);
+      drawListMenu("OPTIONS", optionsItems(), optionsIndex);
     } else if (state === "playing"){
       drawSnake();
       drawFood();
@@ -999,7 +992,7 @@
       drawFood();
       var lines = ["GAME OVER"];
       if (justHitHighScore) lines.push("NEW HIGH SCORE!");
-      lines.push("PRESS SPACE");
+      lines.push("PRESS OK");
       drawOverlayBox(lines);
     } else if (state === "mpmenu"){
       drawListMenu("MULTIPLAYER", ["HOST GAME","JOIN GAME"], mpSubIndex);
@@ -1010,7 +1003,7 @@
         "CODE " + (mp ? mp.code : "----"),
         mp && mp.public ? "PUBLIC" : "PRIVATE",
         "WAITING...",
-        "*=CANCEL"
+        "BACK=CANCEL"
       ]);
     } else if (state === "mpjoinmenu"){
       drawListMenu("JOIN GAME", ["PUBLIC LIST","ENTER CODE"], mpSubIndex);
@@ -1019,7 +1012,7 @@
       drawListMenu("ROOMS", roomItems, mpSubIndex);
     } else if (state === "mpjoincode"){
       var padded = mpJoinDigits.join("") + "_".repeat(4 - mpJoinDigits.length);
-      drawOverlayBox([mpJoinError || "ENTER CODE", padded, "*=DEL/BACK"]);
+      drawOverlayBox([mpJoinError || "ENTER CODE", padded, "BACK=DEL"]);
     } else if (state === "mpplaying"){
       drawMpPlaying();
     } else if (state === "mpresult"){
@@ -1077,7 +1070,7 @@
     var lines = [title, "YOU " + myScore, "OPP " + oppScore];
 
     if (!mp || !mp.opponent){
-      lines.push("PRESS 5");
+      lines.push("PRESS OK");
     } else if (mp.voted){
       lines.push("WAITING...");
     } else {
@@ -1091,7 +1084,7 @@
 
   function drawHighscoreBox(){
     if (!leaderboardAvailable){
-      drawOverlayBox(["HIGH SCORE","SERVER OFFLINE","PRESS 5"]);
+      drawOverlayBox(["HIGH SCORE","SERVER OFFLINE","PRESS OK"]);
       return;
     }
     var lines = [];
@@ -1102,7 +1095,7 @@
         lines.push(e.name + " " + e.score);
       });
     }
-    lines.push("PRESS 5");
+    lines.push("PRESS OK");
     drawOverlayBox(lines);
   }
 
@@ -1188,9 +1181,9 @@
     });
   });
 
-  // classic D-pad in the gap between the screen and the keypad - just
-  // dispatches the matching physical key so it reuses all existing
-  // routing (menus, gameplay, multiplayer, name entry) with no new logic.
+  // Nokia-style nav cluster fixed under the screen - just dispatches the
+  // matching physical key so it reuses all existing routing (menus,
+  // gameplay, multiplayer, name entry) with no new logic.
   document.querySelectorAll(".dbtn").forEach(function(btn){
     var key = btn.getAttribute("data-key");
     btn.addEventListener("click", function(){
