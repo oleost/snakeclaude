@@ -533,10 +533,12 @@
         mp.status = res.body.status;
         mp.winner = res.body.winner;
         mp.endReason = res.body.endReason;
+        // re-sync the local prediction clock to the server's actual tick
+        // phase every poll, instead of letting it free-run and drift
+        mpLocalAcc = res.body.tickElapsedMs || 0;
         if (mp.status === "playing" && (state === "mphostwait" || state === "mpresult")){
           state = "mpplaying";
           mp.voted = false;
-          mpLocalAcc = 0;
         }
         if (mp.status === "ended" && state !== "mpresult"){
           state = "mpresult";

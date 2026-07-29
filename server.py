@@ -251,10 +251,16 @@ def get_room_state(code, pid):
         opp = next((p for p in room["players"].values() if p["num"] == opp_num), None)
         my_snake = room["snakes"].get(my_num)
         opp_snake = room["snakes"].get(opp_num)
+        tick_elapsed_ms = max(0, int((time.monotonic() - room["lastTick"]) * 1000))
 
         result = {
             "status": room["status"],
             "food": room["food"],
+            # how far (ms) into the current tick interval the server is
+            # right now - lets the client re-sync its own local prediction
+            # clock to the server's actual phase every poll, instead of
+            # drifting and causing visible rubber-banding corrections
+            "tickElapsedMs": tick_elapsed_ms,
             "you": {
                 "body": my_snake["body"] if my_snake else [],
                 "dir": my_snake["dir"] if my_snake else [0, 0],
