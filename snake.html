@@ -477,157 +477,140 @@
   }
 
   // ---------- multiplayer ----------
-  // The server is still the sole authority on collisions, food and score -
-  // nothing here changes that. But waiting for a poll round-trip before a
-  // snake even appears to move made the game feel laggy, so the client also
-  // runs its own local copy of the tick loop: both snakes are animated
-  // locally every MP_LOCAL_TICK_MS using their last known direction, your
-  // own turns are applied to the local view instantly (not after a round
-  // trip), and every poll response hard-syncs the local view back to
-  // whatever the server says is actually true.
-  var MP_POLL_MS = 120;
-  var MP_LOCAL_TICK_MS = 150;
-  var mpLocalAcc = 0;
+  // A single persistent WebSocket connection per match. The server pushes a
+  // fresh state message the instant anything changes (every tick during
+  // play, immediately on join/replay/disconnect) - there is no polling and
+  // no client-side clock to keep in sync, so there is nothing to drift.
+  var MP_WS_PORT = 8935;
+  var mpWs = null;
   var mp = null;              // active room session, or null
   var mpSubIndex = 0;         // shared selection index for the small mp menus
   var mpJoinDigits = [];
   var mpJoinError = null;
   var mpPublicRooms = [];
   var mpListTimer = null;
-  var mpPollTimer = null;
 
   function isMpState(s){ return typeof s === "string" && s.indexOf("mp") === 0; }
-
-  function mpFetch(path, body){
-    var opts = body
-      ? {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)}
-      : {method:"GET"};
-    return fetch(path, opts).then(function(r){
-      return r.json().catch(function(){ return {}; }).then(function(b){ return {ok:r.ok, body:b}; });
-    });
-  }
 
   function myStoredName(fallback){
     return (localStorage.getItem("snakePlayerName") || fallback).toUpperCase().slice(0, 8);
   }
 
-  function stopMpPolling(){
-    if (mpPollTimer){ clearInterval(mpPollTimer); mpPollTimer = null; }
-  }
-
-  function startMpPolling(){
-    stopMpPolling();
-    mpPollTimer = setInterval(pollMpState, MP_POLL_MS);
-    pollMpState();
-  }
-
-  function pollMpState(){
-    if (!mp) return;
-    mpFetch("/api/mp/state?code=" + encodeURIComponent(mp.code) + "&playerId=" + encodeURIComponent(mp.playerId))
-      .then(function(res){
-        if (!mp) return;
-        if (!res.ok){ stopMpPolling(); return; }
-        mp.you = res.body.you;
-        mp.opponent = res.body.opponent;
-        mp.food = res.body.food;
-        mp.status = res.body.status;
-        mp.winner = res.body.winner;
-        mp.endReason = res.body.endReason;
-        // re-sync the local prediction clock to the server's actual tick
-        // phase every poll, instead of letting it free-run and drift
-        mpLocalAcc = res.body.tickElapsedMs || 0;
-        if (mp.status === "playing" && (state === "mphostwait" || state === "mpresult")){
-          state = "mpplaying";
-          mp.voted = false;
+  function mpConnect(){
+    if (mpWs && mpWs.readyState === WebSocket.OPEN) return Promise.resolve(mpWs);
+    return new Promise(function(resolve, reject){
+      var url = "ws://" + location.hostname + ":" + MP_WS_PORT + "/";
+      var ws = new WebSocket(url);
+      var settled = false;
+      ws.onopen = function(){
+        settled = true;
+        mpWs = ws;
+        resolve(ws);
+      };
+      ws.onerror = function(){
+        if (!settled){ settled = true; reject(new Error("ws error")); }
+      };
+      ws.onclose = function(){
+        if (!settled){ settled = true; reject(new Error("ws closed")); return; }
+        mpWs = null;
+        if (isMpState(state)){
+          // connection dropped mid-session - no reconnect support yet,
+          // just bail back to the menu rather than sit on a dead screen
+          mp = null;
+          state = "menu";
         }
-        if (mp.status === "ended" && state !== "mpresult"){
-          state = "mpresult";
-          mpSubIndex = 0;
-          mp.voted = false;
-        }
-      });
+      };
+      ws.onmessage = function(ev){
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch(e){ return; }
+        handleMpMessage(msg);
+      };
+    });
   }
 
-  function mpLocalStep(){
-    if (!mp) return;
-    stepSnake(mp.you);
-    stepSnake(mp.opponent);
-    function stepSnake(s){
-      if (!s || !s.body || !s.body.length || !s.dir) return;
-      var head = s.body[0];
-      var nextHead = [head[0] + s.dir[0], head[1] + s.dir[1]];
-      s.body = [nextHead].concat(s.body.slice(0, s.body.length - 1));
+  function mpSend(obj){
+    if (mpWs && mpWs.readyState === WebSocket.OPEN) mpWs.send(JSON.stringify(obj));
+  }
+
+  function handleMpMessage(msg){
+    if (msg.type === "hosted"){
+      mp = {
+        code: msg.code, public: msg.public,
+        you: null, opponent: null, food: null, status: "waiting", winner: null, endReason: null, voted: false
+      };
+      state = "mphostwait";
+    } else if (msg.type === "joined"){
+      mp = {
+        code: msg.code, public: null,
+        you: null, opponent: null, food: null, status: "playing", winner: null, endReason: null, voted: false
+      };
+      state = "mpplaying";
+    } else if (msg.type === "error"){
+      if (state === "mpjoincode"){
+        mpJoinError = msg.message === "not_found" ? "NOT FOUND"
+          : msg.message === "profanity" ? "NOT ALLOWED" : "UNAVAILABLE";
+        mpJoinDigits = [];
+      }
+    } else if (msg.type === "publicRooms"){
+      mpPublicRooms = msg.rooms || [];
+      if (mpSubIndex >= mpPublicRooms.length) mpSubIndex = 0;
+    } else if (msg.type === "state"){
+      if (!mp) return;
+      mp.you = msg.you;
+      mp.opponent = msg.opponent;
+      mp.food = msg.food;
+      mp.status = msg.status;
+      mp.winner = msg.winner;
+      mp.endReason = msg.endReason;
+      if (mp.status === "playing" && (state === "mphostwait" || state === "mpresult")){
+        state = "mpplaying";
+        mp.voted = false;
+      }
+      if (mp.status === "ended" && state !== "mpresult"){
+        state = "mpresult";
+        mpSubIndex = 0;
+        mp.voted = false;
+      }
     }
   }
 
   function startHostGame(isPublic){
-    mpFetch("/api/mp/host", {public: isPublic, name: myStoredName("HOST")}).then(function(res){
-      if (!res.ok) return;
-      mp = {
-        code: res.body.code, playerId: res.body.playerId, num: res.body.num, public: isPublic,
-        you: null, opponent: null, food: null, status: "waiting", winner: null, endReason: null, voted: false
-      };
-      state = "mphostwait";
-      startMpPolling();
-    });
-  }
-
-  function refreshPublicRooms(){
-    mpFetch("/api/mp/public").then(function(res){
-      if (res.ok){
-        mpPublicRooms = res.body.rooms || [];
-        if (mpSubIndex >= mpPublicRooms.length) mpSubIndex = 0;
-      }
-    });
+    mpConnect().then(function(){
+      mpSend({type: "host", public: isPublic, name: myStoredName("HOST")});
+    }).catch(function(){});
   }
 
   function enterJoinList(){
     mpSubIndex = 0;
     state = "mpjoinlist";
-    refreshPublicRooms();
-    if (mpListTimer) clearInterval(mpListTimer);
-    mpListTimer = setInterval(function(){
-      if (state === "mpjoinlist") refreshPublicRooms();
-      else { clearInterval(mpListTimer); mpListTimer = null; }
-    }, 1500);
+    mpConnect().then(function(){
+      mpSend({type: "listPublic"});
+      if (mpListTimer) clearInterval(mpListTimer);
+      mpListTimer = setInterval(function(){
+        if (state === "mpjoinlist") mpSend({type: "listPublic"});
+        else { clearInterval(mpListTimer); mpListTimer = null; }
+      }, 1500);
+    }).catch(function(){});
   }
 
   function joinRoomByCode(code){
-    mpFetch("/api/mp/join", {code: code, name: myStoredName("GUEST")}).then(function(res){
-      if (!res.ok){
-        mpJoinError = res.body && res.body.error === "not_found" ? "NOT FOUND" : "UNAVAILABLE";
-        mpJoinDigits = [];
-        return;
-      }
-      mp = {
-        code: res.body.code, playerId: res.body.playerId, num: res.body.num, public: null,
-        you: null, opponent: null, food: null, status: "playing", winner: null, endReason: null, voted: false
-      };
-      state = "mpplaying";
-      mpLocalAcc = 0;
-      startMpPolling();
+    mpConnect().then(function(){
+      mpSend({type: "join", code: code, name: myStoredName("GUEST")});
+    }).catch(function(){
+      mpJoinError = "UNAVAILABLE";
+      mpJoinDigits = [];
     });
   }
 
   function sendMpDirection(d){
-    if (!mp) return;
-    // apply instantly to the local view so turning feels immediate - the
-    // server will correct this on the next poll if it wasn't actually a
-    // legal turn (e.g. a direct reversal)
-    if (mp.you && mp.you.dir){
-      var cur = mp.you.dir;
-      if (!(cur[0] === -d.x && cur[1] === -d.y)){
-        mp.you.dir = [d.x, d.y];
-      }
-    }
-    mpFetch("/api/mp/input", {code: mp.code, playerId: mp.playerId, dir: d});
+    mpSend({type: "input", dir: d});
   }
 
   function leaveMp(){
-    stopMpPolling();
     if (mpListTimer){ clearInterval(mpListTimer); mpListTimer = null; }
-    if (mp && mp.code && mp.playerId){
-      mpFetch("/api/mp/leave", {code: mp.code, playerId: mp.playerId});
+    if (mpWs){
+      try { mpSend({type: "leave"}); mpWs.close(); } catch(e){}
+      mpWs = null;
     }
     mp = null;
   }
@@ -729,7 +712,7 @@
       else if (action === "select"){
         if (mpSubIndex === 0){
           mp.voted = true;
-          mpFetch("/api/mp/replay", {code: mp.code, playerId: mp.playerId});
+          mpSend({type: "replay"});
         } else { leaveMp(); state = "menu"; }
       } else if (action === "back"){ leaveMp(); state = "menu"; }
       return;
@@ -1155,13 +1138,6 @@
         step();
         acc -= tickMs;
         if (state !== "playing") { acc = 0; break; }
-      }
-    }
-    if (state === "mpplaying" && mp){
-      mpLocalAcc += dt;
-      while (mpLocalAcc >= MP_LOCAL_TICK_MS){
-        mpLocalStep();
-        mpLocalAcc -= MP_LOCAL_TICK_MS;
       }
     }
     render();

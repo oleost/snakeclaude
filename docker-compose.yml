@@ -4,6 +4,7 @@ services:
     container_name: snake
     ports:
       - "8934:8934"
+      - "8935:8935"
     volumes:
       - snake-data:/data
     restart: unless-stopped

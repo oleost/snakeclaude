@@ -4,16 +4,19 @@ Snake highscore + multiplayer server.
 Run:  python server.py
 Then open http://localhost:8934/snake.html
 
-Serves snake.html (and any other files in this folder) plus:
-  - a small JSON API for the daily highscore board
-  - a polling-based 1v1 multiplayer mode (host/join by 4-digit code or
-    public lobby list)
+Two independent servers run in this one process:
+  - a plain HTTP server (port SNAKE_PORT, default 8934) serving snake.html
+    and the daily highscore JSON API - unchanged, simple request/response.
+  - a WebSocket server (port SNAKE_WS_PORT, default 8935) that handles
+    everything for 1v1 multiplayer (host/join by 4-digit code or public
+    lobby list).
 
-Multiplayer is server-authoritative: a background thread advances every
-active match on its own schedule using time.monotonic() as the single
-clock, independent of when either client happens to poll. Collisions
-(who hit the wall, who ran into whom, who was first) are always decided
-by that server clock, never by request arrival order.
+Multiplayer is server-authoritative and push-based: an asyncio task
+advances every active match on its own schedule using time.monotonic()
+as the single clock, and immediately pushes the new state to both
+players' open WebSocket connections the moment anything changes -
+there is no polling, so there is nothing for a client clock to drift
+out of phase with.
 
 Match rules: both snakes start in the middle heading away from each
 other. Any crash - wall, your own body, the opponent's body, or a
@@ -24,18 +27,20 @@ penalty (if any) is applied wins the round. Both players then have to
 pick "replay" before a new round starts.
 """
 
+import asyncio
 import http.server
 import json
 import os
 import random
 import re
-import secrets
 import threading
 import time
 from datetime import date
-from urllib.parse import parse_qs, urlsplit
+
+import websockets
 
 PORT = int(os.environ.get("SNAKE_PORT", "8934"))
+WS_PORT = int(os.environ.get("SNAKE_WS_PORT", "8935"))
 DATA_FILE = os.environ.get("SNAKE_DATA_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "highscores.json")
 MAX_ENTRIES = 5
 MAX_NAME_LEN = 8
@@ -119,26 +124,26 @@ def add_entry(client_id, name, score):
         return data
 
 
-# ---------- multiplayer ----------
+# ---------- multiplayer (asyncio + websockets, single event loop) ----------
+# Everything below runs on one asyncio event loop, so plain dicts/sets are
+# safe without locks: coroutines only interleave at "await" points, and
+# none of the state mutations below have an await in the middle of them.
 MP_GRID_W = 24
 MP_GRID_H = 16
 MP_TICK_S = 0.15
 WALL_PENALTY = 0.20
 OPP_PENALTY = 0.10
 FOOD_SCORE = 10
-PLAYER_TIMEOUT = 6      # seconds unseen -> player is dropped
-ROOM_IDLE_TIMEOUT = 90  # seconds of total silence -> room is swept away
+WAITING_ROOM_TIMEOUT_S = 300  # a hosted room nobody ever joined gets swept
 
-rooms = {}
-rooms_lock = threading.RLock()
+rooms = {}  # code -> room dict
 
 
 def make_code():
-    with rooms_lock:
-        while True:
-            code = "%04d" % random.randint(0, 9999)
-            if code not in rooms:
-                return code
+    while True:
+        code = "%04d" % random.randint(0, 9999)
+        if code not in rooms:
+            return code
 
 
 def spawn_snake(side):
@@ -176,109 +181,95 @@ def end_room(room, winner, reason):
     room["replayVotes"] = set()
 
 
-def new_room(public, host_name):
+def reset_for_replay(room):
+    room["snakes"][1] = spawn_snake(1)
+    room["snakes"][2] = spawn_snake(2)
+    place_food(room)
+    room["status"] = "playing"
+    room["winner"] = None
+    room["endReason"] = None
+    room["replayVotes"] = set()
+    room["lastTick"] = time.monotonic()
+
+
+def new_room(public, name, ws):
     now = time.monotonic()
-    with rooms_lock:
-        code = make_code()
-        room = {
-            "code": code,
-            "public": public,
-            "status": "waiting",
-            "lock": threading.RLock(),
-            "created": now,
-            "lastTick": now,
-            "players": {},
-            "snakes": {1: spawn_snake(1)},
-            "food": None,
-            "winner": None,
-            "endReason": None,
-            "replayVotes": set(),
-        }
-        pid = secrets.token_hex(8)
-        room["players"][pid] = {"num": 1, "name": host_name, "lastSeen": now}
-        rooms[code] = room
-    return room, pid
+    code = make_code()
+    room = {
+        "code": code,
+        "public": public,
+        "status": "waiting",
+        "created": now,
+        "lastTick": now,
+        "players": {1: {"ws": ws, "name": name}},
+        "snakes": {1: spawn_snake(1)},
+        "food": None,
+        "winner": None,
+        "endReason": None,
+        "replayVotes": set(),
+    }
+    rooms[code] = room
+    return room
 
 
-def join_room(code, name):
-    with rooms_lock:
-        room = rooms.get(code)
+def join_room(code, name, ws):
+    room = rooms.get(code)
     if not room:
-        return None, None, "not_found"
-    with room["lock"]:
-        if room["status"] != "waiting" or len(room["players"]) >= 2:
-            return None, None, "unavailable"
-        now = time.monotonic()
-        pid = secrets.token_hex(8)
-        room["players"][pid] = {"num": 2, "name": name, "lastSeen": now}
-        room["snakes"][2] = spawn_snake(2)
-        place_food(room)
-        room["status"] = "playing"
-        room["lastTick"] = now
-        return room, pid, None
-
-
-def touch_player(room, pid):
-    p = room["players"].get(pid)
-    if p:
-        p["lastSeen"] = time.monotonic()
+        return None, "not_found"
+    if room["status"] != "waiting" or len(room["players"]) >= 2:
+        return None, "unavailable"
+    room["players"][2] = {"ws": ws, "name": name}
+    room["snakes"][2] = spawn_snake(2)
+    place_food(room)
+    room["status"] = "playing"
+    room["lastTick"] = time.monotonic()
+    return room, None
 
 
 def list_public_rooms():
-    with rooms_lock:
-        room_list = list(rooms.values())
     out = []
-    for r in room_list:
-        with r["lock"]:
-            if r["public"] and r["status"] == "waiting":
-                host = next((p["name"] for p in r["players"].values() if p["num"] == 1), "HOST")
-                out.append({"code": r["code"], "hostName": host})
+    for r in rooms.values():
+        if r["public"] and r["status"] == "waiting":
+            host = r["players"].get(1)
+            if host:
+                out.append({"code": r["code"], "hostName": host["name"]})
     return out
 
 
-def get_room_state(code, pid):
-    with rooms_lock:
-        room = rooms.get(code)
-    if not room:
-        return None, "not_found"
-    with room["lock"]:
-        me = room["players"].get(pid)
-        if not me:
-            return None, "not_found"
-        touch_player(room, pid)
-        my_num = me["num"]
-        opp_num = 2 if my_num == 1 else 1
-        opp = next((p for p in room["players"].values() if p["num"] == opp_num), None)
-        my_snake = room["snakes"].get(my_num)
-        opp_snake = room["snakes"].get(opp_num)
-        tick_elapsed_ms = max(0, int((time.monotonic() - room["lastTick"]) * 1000))
+def build_state_payload(room, my_num):
+    opp_num = 2 if my_num == 1 else 1
+    opp = room["players"].get(opp_num)
+    my_snake = room["snakes"].get(my_num)
+    opp_snake = room["snakes"].get(opp_num)
 
-        result = {
-            "status": room["status"],
-            "food": room["food"],
-            # how far (ms) into the current tick interval the server is
-            # right now - lets the client re-sync its own local prediction
-            # clock to the server's actual phase every poll, instead of
-            # drifting and causing visible rubber-banding corrections
-            "tickElapsedMs": tick_elapsed_ms,
-            "you": {
-                "body": my_snake["body"] if my_snake else [],
-                "dir": my_snake["dir"] if my_snake else [0, 0],
-                "score": my_snake["score"] if my_snake else 0,
-            },
-            "opponent": ({
-                "name": opp["name"],
-                "body": opp_snake["body"] if opp_snake else [],
-                "dir": opp_snake["dir"] if opp_snake else [0, 0],
-                "score": opp_snake["score"] if opp_snake else 0,
-            } if opp else None),
-        }
-        if room["status"] == "ended":
-            w = room["winner"]
-            result["winner"] = "you" if w == my_num else ("opponent" if w == opp_num else w)
-            result["endReason"] = room["endReason"]
-            result["youReplayVoted"] = my_num in room["replayVotes"]
-        return result, None
+    payload = {
+        "type": "state",
+        "status": room["status"],
+        "food": room["food"],
+        "you": {
+            "body": my_snake["body"] if my_snake else [],
+            "score": my_snake["score"] if my_snake else 0,
+        },
+        "opponent": ({
+            "name": opp["name"],
+            "body": opp_snake["body"] if opp_snake else [],
+            "score": opp_snake["score"] if opp_snake else 0,
+        } if opp else None),
+    }
+    if room["status"] == "ended":
+        w = room["winner"]
+        payload["winner"] = "you" if w == my_num else ("opponent" if w == opp_num else w)
+        payload["endReason"] = room["endReason"]
+        payload["youReplayVoted"] = my_num in room["replayVotes"]
+    return payload
+
+
+async def broadcast(room):
+    for num, p in list(room["players"].items()):
+        try:
+            await p["ws"].send(json.dumps(build_state_payload(room, num)))
+        except websockets.exceptions.ConnectionClosed:
+            pass
 
 
 def advance_room(room, now):
@@ -325,37 +316,105 @@ def advance_room(room, now):
     room["lastTick"] += MP_TICK_S
 
 
-def game_loop_thread():
+async def handle_disconnect(room, num):
+    room["players"].pop(num, None)
+    if room["status"] == "waiting" or not room["players"]:
+        rooms.pop(room["code"], None)
+        return
+    if room["status"] == "playing":
+        end_room(room, None, "opponent_left")
+    await broadcast(room)
+
+
+async def game_loop():
     while True:
         now = time.monotonic()
-        with rooms_lock:
-            room_list = list(rooms.values())
+        for room in list(rooms.values()):
+            if room["status"] == "playing" and now - room["lastTick"] >= MP_TICK_S:
+                advance_room(room, now)
+                await broadcast(room)
 
-        for room in room_list:
-            with room["lock"]:
-                if room["status"] == "playing" and now - room["lastTick"] >= MP_TICK_S:
-                    advance_room(room, now)
-                if room["status"] in ("playing", "ended"):
-                    for pid, p in list(room["players"].items()):
-                        if now - p["lastSeen"] > PLAYER_TIMEOUT:
-                            room["players"].pop(pid, None)
-                            if room["status"] == "playing":
-                                end_room(room, None, "opponent_left")
-                            break
+        stale = [c for c, r in rooms.items()
+                 if r["status"] == "waiting" and now - r["created"] > WAITING_ROOM_TIMEOUT_S]
+        for c in stale:
+            del rooms[c]
 
-        with rooms_lock:
-            stale = []
-            for code, r in rooms.items():
-                seen = [p["lastSeen"] for p in r["players"].values()]
-                last_activity = max(seen) if seen else r["created"]
-                if now - last_activity > ROOM_IDLE_TIMEOUT:
-                    stale.append(code)
-            for code in stale:
-                del rooms[code]
-
-        time.sleep(0.02)
+        await asyncio.sleep(0.02)
 
 
+async def ws_handler(websocket):
+    room = None
+    num = None
+    try:
+        async for raw in websocket:
+            try:
+                msg = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            mtype = msg.get("type")
+
+            if mtype == "host":
+                name = sanitize_name(msg.get("name", "")) or "HOST"
+                if contains_bad_word(name):
+                    await websocket.send(json.dumps({"type": "error", "message": "profanity"}))
+                    continue
+                room = new_room(bool(msg.get("public")), name, websocket)
+                num = 1
+                await websocket.send(json.dumps({"type": "hosted", "code": room["code"], "public": room["public"]}))
+
+            elif mtype == "join":
+                code = re.sub(r"\D", "", str(msg.get("code", "")))[:4]
+                name = sanitize_name(msg.get("name", "")) or "GUEST"
+                if len(code) != 4:
+                    await websocket.send(json.dumps({"type": "error", "message": "bad_code"}))
+                    continue
+                if contains_bad_word(name):
+                    await websocket.send(json.dumps({"type": "error", "message": "profanity"}))
+                    continue
+                joined_room, err = join_room(code, name, websocket)
+                if err:
+                    await websocket.send(json.dumps({"type": "error", "message": err}))
+                    continue
+                room = joined_room
+                num = 2
+                await websocket.send(json.dumps({"type": "joined", "code": room["code"]}))
+                await broadcast(room)
+
+            elif mtype == "listPublic":
+                await websocket.send(json.dumps({"type": "publicRooms", "rooms": list_public_rooms()}))
+
+            elif mtype == "input":
+                if room and num and room["status"] == "playing":
+                    d = msg.get("dir") or {}
+                    dx, dy = d.get("x"), d.get("y")
+                    if (dx, dy) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        snake = room["snakes"].get(num)
+                        if snake:
+                            snake["nextDir"] = [dx, dy]
+
+            elif mtype == "replay":
+                if room and num and room["status"] == "ended":
+                    room["replayVotes"].add(num)
+                    if len(room["players"]) == 2 and {1, 2} <= room["replayVotes"]:
+                        reset_for_replay(room)
+                    await broadcast(room)
+
+            elif mtype == "leave":
+                break
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    finally:
+        if room is not None and num is not None:
+            await handle_disconnect(room, num)
+
+
+async def ws_main():
+    async with websockets.serve(ws_handler, "0.0.0.0", WS_PORT, ping_interval=15, ping_timeout=15):
+        print("Multiplayer WebSocket on ws://0.0.0.0:%d/" % WS_PORT)
+        await game_loop()
+
+
+# ---------- static file + highscore HTTP server (unchanged transport) ----------
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         # this project gets redeployed often - never let a browser (mobile
@@ -383,43 +442,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return {}
 
     def do_GET(self):
-        parsed = urlsplit(self.path)
-        path = parsed.path
-        qs = parse_qs(parsed.query)
-
-        if path == "/api/highscores":
+        if self.path == "/api/highscores":
             data = load_board()
             return self.send_json(200, {"date": data["date"], "entries": public_entries(data["entries"])})
-
-        if path == "/api/mp/public":
-            return self.send_json(200, {"rooms": list_public_rooms()})
-
-        if path == "/api/mp/state":
-            code = (qs.get("code") or [""])[0]
-            pid = (qs.get("playerId") or [""])[0]
-            state, err = get_room_state(code, pid)
-            if err:
-                return self.send_json(404, {"error": err})
-            return self.send_json(200, state)
-
         super().do_GET()
 
     def do_POST(self):
-        if self.path == "/api/highscores":
-            return self.handle_highscore_post()
-        if self.path == "/api/mp/host":
-            return self.handle_mp_host()
-        if self.path == "/api/mp/join":
-            return self.handle_mp_join()
-        if self.path == "/api/mp/input":
-            return self.handle_mp_input()
-        if self.path == "/api/mp/replay":
-            return self.handle_mp_replay()
-        if self.path == "/api/mp/leave":
-            return self.handle_mp_leave()
-        self.send_error(404)
-
-    def handle_highscore_post(self):
+        if self.path != "/api/highscores":
+            self.send_error(404)
+            return
         payload = self.read_json_body()
         score = payload.get("score")
         if not isinstance(score, (int, float)) or score <= 0:
@@ -438,99 +469,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         data = add_entry(client_id, name, int(score))
         return self.send_json(200, {"date": data["date"], "entries": public_entries(data["entries"])})
 
-    def handle_mp_host(self):
-        payload = self.read_json_body()
-        name = sanitize_name(payload.get("name", "")) or "HOST"
-        if contains_bad_word(name):
-            return self.send_json(400, {"error": "profanity"})
-        room, pid = new_room(bool(payload.get("public")), name)
-        return self.send_json(200, {"code": room["code"], "playerId": pid, "num": 1})
-
-    def handle_mp_join(self):
-        payload = self.read_json_body()
-        code = re.sub(r"\D", "", str(payload.get("code", "")))[:4]
-        name = sanitize_name(payload.get("name", "")) or "GUEST"
-        if len(code) != 4:
-            return self.send_json(400, {"error": "bad_code"})
-        if contains_bad_word(name):
-            return self.send_json(400, {"error": "profanity"})
-        room, pid, err = join_room(code, name)
-        if err:
-            return self.send_json(404, {"error": err})
-        return self.send_json(200, {"code": room["code"], "playerId": pid, "num": 2})
-
-    def handle_mp_input(self):
-        payload = self.read_json_body()
-        code = str(payload.get("code", ""))
-        pid = str(payload.get("playerId", ""))
-        d = payload.get("dir") or {}
-        dx, dy = d.get("x"), d.get("y")
-        if (dx, dy) not in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            return self.send_json(400, {"error": "bad_dir"})
-        with rooms_lock:
-            room = rooms.get(code)
-        if not room:
-            return self.send_json(404, {"error": "not_found"})
-        with room["lock"]:
-            me = room["players"].get(pid)
-            if not me:
-                return self.send_json(404, {"error": "not_found"})
-            touch_player(room, pid)
-            snake = room["snakes"].get(me["num"])
-            if snake and room["status"] == "playing":
-                snake["nextDir"] = [dx, dy]
-        return self.send_json(200, {"ok": True})
-
-    def handle_mp_replay(self):
-        payload = self.read_json_body()
-        code = str(payload.get("code", ""))
-        pid = str(payload.get("playerId", ""))
-        with rooms_lock:
-            room = rooms.get(code)
-        if not room:
-            return self.send_json(404, {"error": "not_found"})
-        with room["lock"]:
-            me = room["players"].get(pid)
-            if not me:
-                return self.send_json(404, {"error": "not_found"})
-            touch_player(room, pid)
-            if room["status"] != "ended":
-                return self.send_json(400, {"error": "not_ended"})
-            room["replayVotes"].add(me["num"])
-            if len(room["players"]) == 2 and {1, 2} <= room["replayVotes"]:
-                room["snakes"][1] = spawn_snake(1)
-                room["snakes"][2] = spawn_snake(2)
-                place_food(room)
-                room["status"] = "playing"
-                room["winner"] = None
-                room["endReason"] = None
-                room["replayVotes"] = set()
-                room["lastTick"] = time.monotonic()
-        return self.send_json(200, {"ok": True})
-
-    def handle_mp_leave(self):
-        payload = self.read_json_body()
-        code = str(payload.get("code", ""))
-        pid = str(payload.get("playerId", ""))
-        with rooms_lock:
-            room = rooms.get(code)
-        if room:
-            with room["lock"]:
-                room["players"].pop(pid, None)
-                if len(room["players"]) == 0:
-                    with rooms_lock:
-                        rooms.pop(code, None)
-                elif room["status"] == "playing":
-                    end_room(room, None, "opponent_left")
-        return self.send_json(200, {"ok": True})
-
     def log_message(self, fmt, *args):
         pass
 
 
-if __name__ == "__main__":
+def run_http_server():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    threading.Thread(target=game_loop_thread, daemon=True).start()
     with http.server.ThreadingHTTPServer(("", PORT), Handler) as httpd:
-        print("Serving Snake on http://localhost:%d/snake.html" % PORT)
+        print("Serving Snake on http://0.0.0.0:%d/snake.html" % PORT)
         httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    threading.Thread(target=run_http_server, daemon=True).start()
+    asyncio.run(ws_main())
