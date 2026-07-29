@@ -622,6 +622,26 @@
     mp = null;
   }
 
+  // corner-turn (keys 1/9) for multiplayer: same idea as solo's cornerTurn -
+  // pick whichever of the two perpendicular directions isn't a no-op/reversal
+  // of the CURRENT heading. There's no local dirQueue in multiplayer (the
+  // server is authoritative), so the current heading is read back from the
+  // last two body segments the server sent, rather than tracked client-side.
+  function mpCurrentDir(){
+    var body = mp && mp.you && mp.you.body;
+    if (!body || body.length < 2) return {x:1, y:0};
+    return {x: body[0][0]-body[1][0], y: body[0][1]-body[1][1]};
+  }
+
+  function mpCornerPick(a, b){
+    var cur = mpCurrentDir();
+    function same(v){ return cur.x===v.x && cur.y===v.y; }
+    function reverse(v){ return cur.x===-v.x && cur.y===-v.y; }
+    if (!same(a) && !reverse(a)) return a;
+    if (!same(b) && !reverse(b)) return b;
+    return null;
+  }
+
   function mpNormalizeKey(key){
     if (key === "ArrowUp" || key === "w" || key === "W" || key === "2") return "up";
     if (key === "ArrowDown" || key === "s" || key === "S" || key === "8") return "down";
@@ -654,6 +674,8 @@
         case "ArrowDown": case "s": case "S": case "8": dir = {x:0,y:1}; break;
         case "ArrowLeft": case "a": case "A": case "4": dir = {x:-1,y:0}; break;
         case "ArrowRight": case "d": case "D": case "6": dir = {x:1,y:0}; break;
+        case "1": dir = mpCornerPick({x:0,y:-1}, {x:-1,y:0}); break;
+        case "9": dir = mpCornerPick({x:0,y:1}, {x:1,y:0}); break;
         case "*": case "Escape": leaveMp(); state = "menu"; return;
       }
       if (dir) sendMpDirection(dir);
