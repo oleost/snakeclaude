@@ -543,13 +543,13 @@
       }
     } else if (msg.type === "hosted"){
       mp = {
-        code: msg.code, public: msg.public,
+        code: msg.code, public: msg.public, wallsEnabled: msg.walls,
         you: null, opponent: null, food: null, status: "waiting", winner: null, endReason: null, voted: false
       };
       state = "mphostwait";
     } else if (msg.type === "joined"){
       mp = {
-        code: msg.code, public: null,
+        code: msg.code, public: null, wallsEnabled: msg.walls,
         you: null, opponent: null, food: null, status: "countdown", countdown: null,
         winner: null, endReason: null, voted: false
       };
@@ -569,6 +569,7 @@
       mp.opponent = msg.opponent;
       mp.food = msg.food;
       mp.status = msg.status;
+      mp.wallsEnabled = msg.wallsEnabled;
       mp.countdown = msg.countdown;
       mp.winner = msg.winner;
       mp.endReason = msg.endReason;
@@ -586,7 +587,7 @@
 
   function startHostGame(isPublic){
     wsConnect().then(function(){
-      wsSend({type: "host", public: isPublic, name: myStoredName("HOST")});
+      wsSend({type: "host", public: isPublic, name: myStoredName("HOST"), walls: wallsEnabled});
     }).catch(function(){});
   }
 
@@ -1041,14 +1042,14 @@
     } else if (state === "mphostwait"){
       drawOverlayBox([
         "CODE " + (mp ? mp.code : "----"),
-        mp && mp.public ? "PUBLIC" : "PRIVATE",
+        (mp && mp.public ? "PUBLIC" : "PRIVATE") + " " + (mp && mp.wallsEnabled ? "#" : "O"),
         "WAITING...",
         "BACK=CANCEL"
       ]);
     } else if (state === "mpjoinmenu"){
       drawListMenu("JOIN GAME", ["PUBLIC LIST","ENTER CODE"], mpSubIndex);
     } else if (state === "mpjoinlist"){
-      var roomItems = mpPublicRooms.map(function(r){ return r.code + " " + r.hostName; });
+      var roomItems = mpPublicRooms.map(function(r){ return r.code + " " + r.hostName + " " + (r.walls ? "#" : "O"); });
       drawListMenu("ROOMS", roomItems, mpSubIndex);
     } else if (state === "mpjoincode"){
       var padded = mpJoinDigits.join("") + "_".repeat(4 - mpJoinDigits.length);

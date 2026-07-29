@@ -245,12 +245,13 @@ def reset_for_replay(room):
     start_countdown(room)
 
 
-def new_room(public, name, ws):
+def new_room(public, name, ws, walls_enabled):
     now = time.monotonic()
     code = make_code()
     room = {
         "code": code,
         "public": public,
+        "wallsEnabled": bool(walls_enabled),
         "status": "waiting",
         "created": now,
         "lastTick": now,
@@ -284,7 +285,7 @@ def list_public_rooms():
         if r["public"] and r["status"] == "waiting":
             host = r["players"].get(1)
             if host:
-                out.append({"code": r["code"], "hostName": host["name"]})
+                out.append({"code": r["code"], "hostName": host["name"], "walls": r["wallsEnabled"]})
     return out
 
 
@@ -297,6 +298,7 @@ def build_state_payload(room, my_num):
     payload = {
         "type": "state",
         "status": room["status"],
+        "wallsEnabled": room["wallsEnabled"],
         "food": room["food"],
         "you": {
             "body": my_snake["body"] if my_snake else [],
@@ -339,13 +341,24 @@ def advance_room(room, now):
     def oob(h):
         return h[0] < 0 or h[0] >= MP_GRID_W or h[1] < 0 or h[1] >= MP_GRID_H
 
+    # walls setting is the host's - decided once at room creation, same as
+    # solo mode: with walls off, going out of bounds wraps around instead
+    # of crashing.
+    wall_hit = {1: False, 2: False}
+    if room["wallsEnabled"]:
+        wall_hit[1] = oob(h1)
+        wall_hit[2] = oob(h2)
+    else:
+        h1 = [h1[0] % MP_GRID_W, h1[1] % MP_GRID_H]
+        h2 = [h2[0] % MP_GRID_W, h2[1] % MP_GRID_H]
+
     head_on = (h1 == h2) or (h1 == s2["body"][0] and h2 == s1["body"][0])
     crashed = {}
 
     if not head_on:
-        if oob(h1) or h1 in s1["body"]:
+        if wall_hit[1] or h1 in s1["body"]:
             crashed[1] = WALL_PENALTY
-        if oob(h2) or h2 in s2["body"]:
+        if wall_hit[2] or h2 in s2["body"]:
             crashed[2] = WALL_PENALTY
         if 1 not in crashed and h1 in s2["body"]:
             crashed[1] = OPP_PENALTY
@@ -448,9 +461,12 @@ async def ws_handler(websocket):
                 if contains_bad_word(name):
                     await websocket.send(json.dumps({"type": "error", "message": "profanity"}))
                     continue
-                room = new_room(bool(msg.get("public")), name, websocket)
+                room = new_room(bool(msg.get("public")), name, websocket, msg.get("walls", True))
                 num = 1
-                await websocket.send(json.dumps({"type": "hosted", "code": room["code"], "public": room["public"]}))
+                await websocket.send(json.dumps({
+                    "type": "hosted", "code": room["code"], "public": room["public"],
+                    "walls": room["wallsEnabled"],
+                }))
 
             elif mtype == "join":
                 code = re.sub(r"\D", "", str(msg.get("code", "")))[:4]
@@ -467,7 +483,9 @@ async def ws_handler(websocket):
                     continue
                 room = joined_room
                 num = 2
-                await websocket.send(json.dumps({"type": "joined", "code": room["code"]}))
+                await websocket.send(json.dumps({
+                    "type": "joined", "code": room["code"], "walls": room["wallsEnabled"],
+                }))
                 await broadcast(room)
 
             elif mtype == "listPublic":

@@ -95,6 +95,13 @@ WebSocket the instant anything changes - collisions, timing and scoring are
 always decided by the server, and there's no polling for the client to fall
 behind on.
 
+Walls on/off is the host's OPTIONS setting at the moment they start hosting
+- with walls off, going out of bounds wraps around to the opposite edge
+instead of crashing, same as solo mode. A small `#`/`O` marker (walls
+on/off) shows next to the code on the host's own waiting screen, and next
+to each room in the public room list so a joiner can see it before picking
+one.
+
 Once both players are in (on join, or after both pick replay), there's a
 server-driven 3-2-1 countdown before the round actually starts - snakes are
 placed but frozen until it hits zero.
