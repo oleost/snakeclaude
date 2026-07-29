@@ -1167,10 +1167,15 @@
     }
   });
 
+  // pointerdown (not click) so a press registers immediately - click only
+  // fires on release, which meant holding a button down near a wall never
+  // turned you until you let go.
   document.querySelectorAll(".key").forEach(function(btn){
     var action = btn.getAttribute("data-action");
     var digit = btn.getAttribute("data-digit");
-    btn.addEventListener("click", function(){
+    btn.addEventListener("pointerdown", function(e){
+      if (e.button > 0) return;
+      e.preventDefault();
       if (state === "nameentry"){
         nameEntryKey(digit);
         return;
@@ -1188,7 +1193,9 @@
   // gameplay, multiplayer, name entry) with no new logic.
   document.querySelectorAll(".dbtn").forEach(function(btn){
     var key = btn.getAttribute("data-key");
-    btn.addEventListener("click", function(){
+    btn.addEventListener("pointerdown", function(e){
+      if (e.button > 0) return;
+      e.preventDefault();
       window.dispatchEvent(new KeyboardEvent("keydown", {key: key, bubbles: true, cancelable: true}));
     });
   });
@@ -1202,7 +1209,8 @@
   // taps on the Nokia nav cluster (BACK/OK/up/down) are left untouched.
   var phoneEl = document.querySelector(".phone");
   var dpadEl = document.querySelector(".dpad");
-  phoneEl.addEventListener("click", function(e){
+  phoneEl.addEventListener("pointerdown", function(e){
+    if (e.button > 0) return;
     if (!bigCornerButtons || state !== "playing") return;
     if (e.clientY < dpadEl.getBoundingClientRect().bottom) return;
     var pr = phoneEl.getBoundingClientRect();
