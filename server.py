@@ -257,11 +257,13 @@ def get_room_state(code, pid):
             "food": room["food"],
             "you": {
                 "body": my_snake["body"] if my_snake else [],
+                "dir": my_snake["dir"] if my_snake else [0, 0],
                 "score": my_snake["score"] if my_snake else 0,
             },
             "opponent": ({
                 "name": opp["name"],
                 "body": opp_snake["body"] if opp_snake else [],
+                "dir": opp_snake["dir"] if opp_snake else [0, 0],
                 "score": opp_snake["score"] if opp_snake else 0,
             } if opp else None),
         }

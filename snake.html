@@ -23,6 +23,9 @@
 
   .phone{
     width:min(92vw, 380px);
+    height:min(100%, 960px);
+    display:flex;
+    flex-direction:column;
     background:linear-gradient(160deg,#8f9296 0%,#6c6f74 45%,#54565b 100%);
     border-radius:34px;
     padding:22px 20px 26px;
@@ -100,7 +103,8 @@
     display:grid;
     grid-template-columns:repeat(3, 1fr);
     gap:8px;
-    margin-top:16px;
+    padding-top:16px;
+    margin-top:auto;
   }
 
   .key{
@@ -406,10 +410,17 @@
   }
 
   // ---------- multiplayer ----------
-  // Server-authoritative: the client only ever sends direction input and
-  // polls for the current state. All movement, collisions and timing are
-  // decided by the server's own clock, never by the client.
+  // The server is still the sole authority on collisions, food and score -
+  // nothing here changes that. But waiting for a poll round-trip before a
+  // snake even appears to move made the game feel laggy, so the client also
+  // runs its own local copy of the tick loop: both snakes are animated
+  // locally every MP_LOCAL_TICK_MS using their last known direction, your
+  // own turns are applied to the local view instantly (not after a round
+  // trip), and every poll response hard-syncs the local view back to
+  // whatever the server says is actually true.
   var MP_POLL_MS = 120;
+  var MP_LOCAL_TICK_MS = 150;
+  var mpLocalAcc = 0;
   var mp = null;              // active room session, or null
   var mpSubIndex = 0;         // shared selection index for the small mp menus
   var mpJoinDigits = [];
@@ -458,6 +469,7 @@
         if (mp.status === "playing" && (state === "mphostwait" || state === "mpresult")){
           state = "mpplaying";
           mp.voted = false;
+          mpLocalAcc = 0;
         }
         if (mp.status === "ended" && state !== "mpresult"){
           state = "mpresult";
@@ -465,6 +477,18 @@
           mp.voted = false;
         }
       });
+  }
+
+  function mpLocalStep(){
+    if (!mp) return;
+    stepSnake(mp.you);
+    stepSnake(mp.opponent);
+    function stepSnake(s){
+      if (!s || !s.body || !s.body.length || !s.dir) return;
+      var head = s.body[0];
+      var nextHead = [head[0] + s.dir[0], head[1] + s.dir[1]];
+      s.body = [nextHead].concat(s.body.slice(0, s.body.length - 1));
+    }
   }
 
   function startHostGame(isPublic){
@@ -511,12 +535,22 @@
         you: null, opponent: null, food: null, status: "playing", winner: null, endReason: null, voted: false
       };
       state = "mpplaying";
+      mpLocalAcc = 0;
       startMpPolling();
     });
   }
 
   function sendMpDirection(d){
     if (!mp) return;
+    // apply instantly to the local view so turning feels immediate - the
+    // server will correct this on the next poll if it wasn't actually a
+    // legal turn (e.g. a direct reversal)
+    if (mp.you && mp.you.dir){
+      var cur = mp.you.dir;
+      if (!(cur[0] === -d.x && cur[1] === -d.y)){
+        mp.you.dir = [d.x, d.y];
+      }
+    }
     mpFetch("/api/mp/input", {code: mp.code, playerId: mp.playerId, dir: d});
   }
 
@@ -1023,6 +1057,13 @@
         step();
         acc -= tickMs;
         if (state !== "playing") { acc = 0; break; }
+      }
+    }
+    if (state === "mpplaying" && mp){
+      mpLocalAcc += dt;
+      while (mpLocalAcc >= MP_LOCAL_TICK_MS){
+        mpLocalStep();
+        mpLocalAcc -= MP_LOCAL_TICK_MS;
       }
     }
     render();
