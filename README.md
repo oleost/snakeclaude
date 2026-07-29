@@ -105,3 +105,8 @@ immediately. A wall/self crash costs the crasher 20% of their score, running
 into the opponent's body costs 10%; a head-on hit costs nothing extra.
 Whoever has more points once the penalty (if any) is applied wins the round.
 Both players then have to pick "replay" before a new round starts.
+
+Food spawns are biased toward whichever free cell is closest to equidistant
+from both snakes' heads, measured by actual shortest path (BFS around both
+bodies) rather than straight-line distance, so a snake's own tail or the
+opponent's body forcing a detour is accounted for rather than ignored.

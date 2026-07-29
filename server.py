@@ -41,6 +41,7 @@ import os
 import random
 import re
 import time
+from collections import deque
 from datetime import date
 
 import websockets
@@ -162,37 +163,55 @@ def spawn_snake(side):
     return {"body": body, "dir": d, "nextDir": d, "score": 0}
 
 
+def bfs_distances(start, blocked, w, h):
+    """Shortest path length (in moves) from start to every reachable cell,
+    stepping only through cells not in `blocked` - i.e. the actual route a
+    snake could crawl, not a straight line through its own tail or the
+    opponent's body."""
+    dist = {start: 0}
+    q = deque([start])
+    while q:
+        cx, cy = q.popleft()
+        d = dist[(cx, cy)] + 1
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            np = (cx + dx, cy + dy)
+            if 0 <= np[0] < w and 0 <= np[1] < h and np not in blocked and np not in dist:
+                dist[np] = d
+                q.append(np)
+    return dist
+
+
 def place_food(room):
     occupied = {tuple(p) for p in room["snakes"][1]["body"]} | {tuple(p) for p in room["snakes"][2]["body"]}
-    h1, h2 = room["snakes"][1]["body"][0], room["snakes"][2]["body"][0]
+    h1 = tuple(room["snakes"][1]["body"][0])
+    h2 = tuple(room["snakes"][2]["body"][0])
 
-    # try a bunch of random cells and keep the one closest to equidistant
-    # from both heads (Manhattan distance), so food doesn't keep favoring
-    # whoever happens to be nearer - a plain random pick can land right
-    # next to one player and across the map from the other.
-    def diff_at(fx, fy):
-        d1 = abs(fx - h1[0]) + abs(fy - h1[1])
-        d2 = abs(fx - h2[0]) + abs(fy - h2[1])
-        return abs(d1 - d2)
+    # fairness by actual reachable path, not straight-line distance - a
+    # snake's own tail or the opponent's body can force a detour that a
+    # plain abs(dx)+abs(dy) comparison would never see.
+    dist1 = bfs_distances(h1, occupied, MP_GRID_W, MP_GRID_H)
+    dist2 = bfs_distances(h2, occupied, MP_GRID_W, MP_GRID_H)
 
-    best, best_diff = None, None
-    for _ in range(60):
-        fx, fy = random.randrange(MP_GRID_W), random.randrange(MP_GRID_H)
-        if (fx, fy) in occupied:
-            continue
-        diff = diff_at(fx, fy)
-        if best_diff is None or diff < best_diff:
-            best, best_diff = (fx, fy), diff
-        if best_diff <= 1:
-            break
+    best_diff = None
+    candidates = []
+    for x in range(MP_GRID_W):
+        for y in range(MP_GRID_H):
+            p = (x, y)
+            if p in occupied or p not in dist1 or p not in dist2:
+                continue
+            diff = abs(dist1[p] - dist2[p])
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                candidates = [p]
+            elif diff == best_diff:
+                candidates.append(p)
 
-    if best is None:
-        # fallback for a near-full grid where 60 random tries all missed -
-        # scan every free cell so this always terminates with a placement
-        free = [(x, y) for x in range(MP_GRID_W) for y in range(MP_GRID_H) if (x, y) not in occupied]
-        best = min(free, key=lambda p: diff_at(*p))
+    if not candidates:
+        # neither reachable-by-both cell exists (e.g. bodies have split the
+        # board in two) - fall back to any free cell at all
+        candidates = [(x, y) for x in range(MP_GRID_W) for y in range(MP_GRID_H) if (x, y) not in occupied]
 
-    room["food"] = list(best)
+    room["food"] = list(random.choice(candidates)) if candidates else list(h1)
 
 
 def decide_winner(score1, score2):
