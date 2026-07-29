@@ -46,11 +46,15 @@ copy of `snake.html` lingering on a phone after an update.
   up/OK/down rocker with a BACK key to its left (standing in for the
   classic "C" key) - mirrors the keypad's move/select/back everywhere,
   including menus, gameplay and multiplayer.
-- OPTIONS menu holds two toggles: WALLS ON/OFF, and "BIG CORNER" - while
-  the latter is on and you're actually playing (not paused/menu), the tap
-  targets for keys 1 and 9 expand to cover most of the keypad (nothing
-  changes visually), making one-handed corner-turn steering much easier on
-  a touchscreen.
+- OPTIONS menu holds WALLS ON/OFF, "1/9 ONLY" (see below), and an entry to
+  edit your stored highscore nickname.
+- "1/9 ONLY": while it's on and you're actually playing (not paused/menu),
+  any tap on the whole lower half of the phone - the keypad, the gray gap
+  above it, and the side bezel around it, left half or right half - acts as
+  a corner-turn on key 1 or key 9 respectively (nothing changes visually).
+  This is decided from the actual tap position at click time rather than a
+  fixed on-screen zone, so there's no dead spot anywhere below the nav
+  cluster. The nav cluster (BACK/OK/up/down) itself is unaffected.
 
 ## Mobile
 

@@ -153,20 +153,6 @@
     margin-top:auto;
   }
 
-  /* invisible, oversized tap targets for corner-turn (keys 1 and 9) -
-     enabled via OPTIONS, active during gameplay only. Purely functional,
-     nothing about the visible keypad below them changes. Each one covers
-     its entire half of the keypad (all rows, edge to edge) so there's no
-     dead strip anywhere left/right/above/below that fails to register. */
-  .corner-zone{
-    position:absolute;
-    display:none;
-    background:transparent;
-    z-index:5;
-  }
-  .cz-1{ left:0;  top:0; width:50%; height:100%; }
-  .cz-9{ left:50%; top:0; width:50%; height:100%; }
-
   .key{
     display:flex;
     flex-direction:column;
@@ -241,9 +227,6 @@
       <button class="key" data-action="back" data-digit="*">✻</button>
       <button class="key" data-action="" data-digit="0"><span class="num">0</span></button>
       <button class="key" data-action="" data-digit="#">#</button>
-
-      <div class="corner-zone cz-1" data-zone="1"></div>
-      <div class="corner-zone cz-9" data-zone="9"></div>
     </div>
   </div>
 
@@ -1045,16 +1028,6 @@
     } else if (state === "mpresult"){
       drawMpResult();
     }
-
-    updateCornerZones();
-  }
-
-  function updateCornerZones(){
-    var active = bigCornerButtons && state === "playing";
-    var display = active ? "block" : "none";
-    for (var i=0;i<cornerZoneEls.length;i++){
-      cornerZoneEls[i].style.display = display;
-    }
   }
 
   function drawMpHud(){
@@ -1214,15 +1187,22 @@
     });
   });
 
-  // oversized invisible tap zones for corner-turn (keys 1 and 9), shown
-  // only when enabled in OPTIONS and only while actually playing solo
-  var cornerZoneEls = Array.prototype.slice.call(document.querySelectorAll(".corner-zone"));
-  cornerZoneEls.forEach(function(el){
-    var zone = el.getAttribute("data-zone");
-    el.addEventListener("click", function(){
-      handleAction(zone === "1" ? "corner-ul" : "corner-dr");
-    });
-  });
+  // "1/9 ONLY" corner-turn zones, decided from real click geometry rather
+  // than CSS percentage boxes - a fixed-size div nested in .keypad could
+  // only ever cover .keypad's own box, never the gray gap above it or the
+  // phone's own side padding, which is exactly where taps were being missed.
+  // Captured on .phone itself so it overrides every keypad button's own
+  // click handler (stopPropagation) while gameplay + the option are active;
+  // taps on the Nokia nav cluster (BACK/OK/up/down) are left untouched.
+  var phoneEl = document.querySelector(".phone");
+  var dpadEl = document.querySelector(".dpad");
+  phoneEl.addEventListener("click", function(e){
+    if (!bigCornerButtons || state !== "playing") return;
+    if (e.clientY < dpadEl.getBoundingClientRect().bottom) return;
+    var pr = phoneEl.getBoundingClientRect();
+    handleAction(e.clientX < pr.left + pr.width / 2 ? "corner-ul" : "corner-dr");
+    e.stopPropagation();
+  }, true);
 
   canvas.addEventListener("click", function(){
     if (state !== "playing") handleAction("action");
