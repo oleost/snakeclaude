@@ -351,6 +351,15 @@ def game_loop_thread():
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        # this project gets redeployed often - never let a browser (mobile
+        # Safari/Chrome especially) hang on to a stale snake.html or API
+        # response after an update
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def send_json(self, code, obj):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
