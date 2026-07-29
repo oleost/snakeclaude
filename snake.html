@@ -99,13 +99,64 @@
     opacity:0.85;
   }
 
+  .dpad{
+    display:grid;
+    grid-template-columns:repeat(3, 40px);
+    grid-template-rows:repeat(3, 40px);
+    gap:6px;
+    align-self:center;
+    margin-top:auto;
+    margin-bottom:auto;
+  }
+  .dbtn{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(160deg,#7d8085,#55585d);
+    border:none;
+    border-radius:8px;
+    color:#e7e9eb;
+    font-size:14px;
+    box-shadow:
+      0 3px 0 rgba(0,0,0,0.45),
+      inset 0 1px 0 rgba(255,255,255,0.25);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .dbtn:active{
+    transform:translateY(2px);
+    box-shadow:
+      0 1px 0 rgba(0,0,0,0.45),
+      inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .dbtn-up{ grid-column:2; grid-row:1; }
+  .dbtn-left{ grid-column:1; grid-row:2; }
+  .dbtn-ok{ grid-column:2; grid-row:2; background:linear-gradient(160deg,#8a9a72,#5c6a4c); font-size:11px; font-weight:700; }
+  .dbtn-right{ grid-column:3; grid-row:2; }
+  .dbtn-down{ grid-column:2; grid-row:3; }
+
   .keypad{
+    position:relative;
     display:grid;
     grid-template-columns:repeat(3, 1fr);
     gap:8px;
     padding-top:16px;
-    margin-top:auto;
+    margin-top:16px;
   }
+
+  /* invisible, oversized tap targets for corner-turn (keys 1 and 9) -
+     enabled via OPTIONS, active during gameplay only. Purely functional,
+     nothing about the visible keypad below them changes. */
+  .corner-zone{
+    position:absolute;
+    display:none;
+    background:transparent;
+    z-index:5;
+  }
+  .cz-1a{ left:0;     top:0;   width:66.6667%; height:25%; }
+  .cz-1b{ left:0;     top:25%; width:50%;      height:25%; }
+  .cz-9a{ left:33.3333%; top:50%; width:66.6667%; height:25%; }
+  .cz-9b{ left:50%;      top:25%; width:50%;      height:25%; }
 
   .key{
     display:flex;
@@ -158,6 +209,14 @@
 
     <div class="hint">2·4·6·8 = MOVE &nbsp; 1/9 = CORNER TURN &nbsp; 5 = START/PAUSE</div>
 
+    <div class="dpad">
+      <button class="dbtn dbtn-up" data-key="ArrowUp">&#9650;</button>
+      <button class="dbtn dbtn-left" data-key="ArrowLeft">&#9664;</button>
+      <button class="dbtn dbtn-ok" data-key="Enter">OK</button>
+      <button class="dbtn dbtn-right" data-key="ArrowRight">&#9654;</button>
+      <button class="dbtn dbtn-down" data-key="ArrowDown">&#9660;</button>
+    </div>
+
     <div class="keypad">
       <button class="key" data-action="corner-ul" data-digit="1"><span class="num">1</span></button>
       <button class="key" data-action="up" data-digit="2"><span class="num">2</span><span class="letters">ABC</span></button>
@@ -171,9 +230,14 @@
       <button class="key" data-action="down" data-digit="8"><span class="num">8</span><span class="letters">TUV</span></button>
       <button class="key" data-action="corner-dr" data-digit="9"><span class="num">9</span><span class="letters">WXYZ</span></button>
 
-      <button class="key" data-action="" data-digit="*">✻</button>
+      <button class="key" data-action="back" data-digit="*">✻</button>
       <button class="key" data-action="" data-digit="0"><span class="num">0</span></button>
       <button class="key" data-action="" data-digit="#">#</button>
+
+      <div class="corner-zone cz-1a" data-zone="1"></div>
+      <div class="corner-zone cz-1b" data-zone="1"></div>
+      <div class="corner-zone cz-9a" data-zone="9"></div>
+      <div class="corner-zone cz-9b" data-zone="9"></div>
     </div>
   </div>
 
@@ -278,7 +342,9 @@
   // mpmenu | mphostoptions | mphostwait | mpjoinmenu | mpjoinlist | mpjoincode | mpplaying | mpresult
   var wallsEnabled = true; // classic mode: hitting the border ends the run
   var menuIndex = 0;
-  var MENU_ACTIONS = ["play", "multiplayer", "walls", "highscore", "howto"];
+  var MENU_ACTIONS = ["play", "multiplayer", "walls", "options", "highscore", "howto"];
+  var optionsIndex = 0;
+  var bigCornerButtons = localStorage.getItem("snakeBigCorner") === "1";
   var snake, dir, dirQueue, food, score, tickMs, acc, lastTime, justHitHighScore;
 
   // ---------- daily server leaderboard ----------
@@ -404,6 +470,7 @@
       case "play": return "PLAY";
       case "multiplayer": return "MULTIPLAYER";
       case "walls": return "WALLS " + (wallsEnabled ? "ON" : "OFF");
+      case "options": return "OPTIONS";
       case "highscore": return "HIGH SCORE";
       case "howto": return "HOW TO PLAY";
     }
@@ -725,6 +792,20 @@
       if (kind === "action") state = "menu";
       return;
     }
+    if (state === "options"){
+      var optItems = ["BIG CORNER " + (bigCornerButtons ? "ON" : "OFF")];
+      if (kind === "up") optionsIndex = (optionsIndex - 1 + optItems.length) % optItems.length;
+      else if (kind === "down") optionsIndex = (optionsIndex + 1) % optItems.length;
+      else if (kind === "action"){
+        if (optionsIndex === 0){
+          bigCornerButtons = !bigCornerButtons;
+          localStorage.setItem("snakeBigCorner", bigCornerButtons ? "1" : "0");
+        }
+      } else if (kind === "back"){
+        state = "menu";
+      }
+      return;
+    }
 
     if (kind === "up") setDirection(0,-1);
     else if (kind === "down") setDirection(0,1);
@@ -745,6 +826,9 @@
       state = "mpmenu";
     } else if (action === "walls"){
       wallsEnabled = !wallsEnabled;
+    } else if (action === "options"){
+      optionsIndex = 0;
+      state = "options";
     } else if (action === "highscore"){
       loadLeaderboard();
       state = "highscore";
@@ -912,6 +996,8 @@
       drawHighscoreBox();
     } else if (state === "howto"){
       drawOverlayBox(["HOW TO PLAY","2 4 6 8 MOVE","1/9 CORNER TURN","5 PAUSE/SELECT","PRESS 5"]);
+    } else if (state === "options"){
+      drawListMenu("OPTIONS", ["BIG CORNER " + (bigCornerButtons ? "ON" : "OFF")], optionsIndex);
     } else if (state === "playing"){
       drawSnake();
       drawFood();
@@ -953,6 +1039,16 @@
       drawMpPlaying();
     } else if (state === "mpresult"){
       drawMpResult();
+    }
+
+    updateCornerZones();
+  }
+
+  function updateCornerZones(){
+    var active = bigCornerButtons && state === "playing";
+    var display = active ? "block" : "none";
+    for (var i=0;i<cornerZoneEls.length;i++){
+      cornerZoneEls[i].style.display = display;
     }
   }
 
@@ -1094,6 +1190,7 @@
       case "6": handleAction("right"); e.preventDefault(); break;
       case "1": handleAction("corner-ul"); e.preventDefault(); break;
       case "9": handleAction("corner-dr"); e.preventDefault(); break;
+      case "*": handleAction("back"); e.preventDefault(); break;
     }
   });
 
@@ -1110,6 +1207,26 @@
         return;
       }
       if (action) handleAction(action);
+    });
+  });
+
+  // classic D-pad in the gap between the screen and the keypad - just
+  // dispatches the matching physical key so it reuses all existing
+  // routing (menus, gameplay, multiplayer, name entry) with no new logic.
+  document.querySelectorAll(".dbtn").forEach(function(btn){
+    var key = btn.getAttribute("data-key");
+    btn.addEventListener("click", function(){
+      window.dispatchEvent(new KeyboardEvent("keydown", {key: key, bubbles: true, cancelable: true}));
+    });
+  });
+
+  // oversized invisible tap zones for corner-turn (keys 1 and 9), shown
+  // only when enabled in OPTIONS and only while actually playing solo
+  var cornerZoneEls = Array.prototype.slice.call(document.querySelectorAll(".corner-zone"));
+  cornerZoneEls.forEach(function(el){
+    var zone = el.getAttribute("data-zone");
+    el.addEventListener("click", function(){
+      handleAction(zone === "1" ? "corner-ul" : "corner-dr");
     });
   });
 
