@@ -95,6 +95,10 @@ WebSocket the instant anything changes - collisions, timing and scoring are
 always decided by the server, and there's no polling for the client to fall
 behind on.
 
+Once both players are in (on join, or after both pick replay), there's a
+server-driven 3-2-1 countdown before the round actually starts - snakes are
+placed but frozen until it hits zero.
+
 Both snakes start in the middle heading away from each other. Any crash -
 wall, your own body, the opponent's body, or a head-on hit - ends the round
 immediately. A wall/self crash costs the crasher 20% of their score, running

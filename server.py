@@ -21,17 +21,21 @@ players' open WebSocket connections the moment anything changes - there
 is no polling, so there is nothing for a client clock to drift out of
 phase with.
 
-Match rules: both snakes start in the middle heading away from each
-other. Any crash - wall, your own body, the opponent's body, or a
-head-on hit - ends the round immediately. A wall/self crash costs the
-crasher 20% of their score, running into the opponent's body costs 10%;
-a head-on hit costs nothing extra. Whoever has more points once the
-penalty (if any) is applied wins the round. Both players then have to
-pick "replay" before a new round starts.
+Match rules: once both players are in (on join, or after both pick
+"replay"), there's a 3-2-1 countdown - both snakes are placed but frozen
+in position - before the round actually starts. Both snakes start in the
+middle heading away from each other. Any crash - wall, your own body,
+the opponent's body, or a head-on hit - ends the round immediately. A
+wall/self crash costs the crasher 20% of their score, running into the
+opponent's body costs 10%; a head-on hit costs nothing extra. Whoever
+has more points once the penalty (if any) is applied wins the round.
+Both players then have to pick "replay" before the next round's
+countdown starts.
 """
 
 import asyncio
 import json
+import math
 import mimetypes
 import os
 import random
@@ -135,6 +139,7 @@ WALL_PENALTY = 0.20
 OPP_PENALTY = 0.10
 FOOD_SCORE = 10
 WAITING_ROOM_TIMEOUT_S = 300  # a hosted room nobody ever joined gets swept
+COUNTDOWN_S = 3  # seconds of 3-2-1 shown before a round (or replay) actually starts
 
 rooms = {}  # code -> room dict
 
@@ -181,15 +186,20 @@ def end_room(room, winner, reason):
     room["replayVotes"] = set()
 
 
+def start_countdown(room):
+    room["status"] = "countdown"
+    room["countdownEnd"] = time.monotonic() + COUNTDOWN_S
+    room["countdownShown"] = None
+
+
 def reset_for_replay(room):
     room["snakes"][1] = spawn_snake(1)
     room["snakes"][2] = spawn_snake(2)
     place_food(room)
-    room["status"] = "playing"
     room["winner"] = None
     room["endReason"] = None
     room["replayVotes"] = set()
-    room["lastTick"] = time.monotonic()
+    start_countdown(room)
 
 
 def new_room(public, name, ws):
@@ -221,8 +231,7 @@ def join_room(code, name, ws):
     room["players"][2] = {"ws": ws, "name": name}
     room["snakes"][2] = spawn_snake(2)
     place_food(room)
-    room["status"] = "playing"
-    room["lastTick"] = time.monotonic()
+    start_countdown(room)
     return room, None
 
 
@@ -261,6 +270,8 @@ def build_state_payload(room, my_num):
         payload["winner"] = "you" if w == my_num else ("opponent" if w == opp_num else w)
         payload["endReason"] = room["endReason"]
         payload["youReplayVoted"] = my_num in room["replayVotes"]
+    if room["status"] == "countdown":
+        payload["countdown"] = room["countdownShown"]
     return payload
 
 
@@ -330,7 +341,16 @@ async def game_loop():
     while True:
         now = time.monotonic()
         for room in list(rooms.values()):
-            if room["status"] == "playing" and now - room["lastTick"] >= MP_TICK_S:
+            if room["status"] == "countdown":
+                remaining = math.ceil(room["countdownEnd"] - now)
+                if remaining > 0 and remaining != room["countdownShown"]:
+                    room["countdownShown"] = remaining
+                    await broadcast(room)
+                if now >= room["countdownEnd"]:
+                    room["status"] = "playing"
+                    room["lastTick"] = now
+                    await broadcast(room)
+            elif room["status"] == "playing" and now - room["lastTick"] >= MP_TICK_S:
                 advance_room(room, now)
                 await broadcast(room)
 

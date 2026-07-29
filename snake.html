@@ -550,7 +550,8 @@
     } else if (msg.type === "joined"){
       mp = {
         code: msg.code, public: null,
-        you: null, opponent: null, food: null, status: "playing", winner: null, endReason: null, voted: false
+        you: null, opponent: null, food: null, status: "countdown", countdown: null,
+        winner: null, endReason: null, voted: false
       };
       state = "mpplaying";
     } else if (msg.type === "error"){
@@ -568,9 +569,10 @@
       mp.opponent = msg.opponent;
       mp.food = msg.food;
       mp.status = msg.status;
+      mp.countdown = msg.countdown;
       mp.winner = msg.winner;
       mp.endReason = msg.endReason;
-      if (mp.status === "playing" && (state === "mphostwait" || state === "mpresult")){
+      if ((mp.status === "playing" || mp.status === "countdown") && (state === "mphostwait" || state === "mpresult")){
         state = "mpplaying";
         mp.voted = false;
       }
@@ -1061,6 +1063,9 @@
       ctx.fillRect(px+1, py,   1, 1);
       ctx.fillRect(px,   py+1, 3, 1);
       ctx.fillRect(px+1, py+2, 1, 1);
+    }
+    if (mp.status === "countdown" && mp.countdown){
+      drawOverlayBox([String(mp.countdown)]);
     }
   }
 
