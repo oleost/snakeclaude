@@ -48,6 +48,8 @@ import websockets
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+
 PORT = int(os.environ.get("SNAKE_PORT", "8934"))
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.environ.get("SNAKE_DATA_FILE") or os.path.join(STATIC_DIR, "highscores.json")

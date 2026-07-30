@@ -46,8 +46,8 @@ copy of `snake.html` lingering on a phone after an update.
   up/OK/down rocker with a BACK key to its left (standing in for the
   classic "C" key) - mirrors the keypad's move/select/back everywhere,
   including menus, gameplay and multiplayer.
-- OPTIONS menu holds WALLS ON/OFF, "1/9 ONLY" (see below), and an entry to
-  edit your stored highscore nickname.
+- OPTIONS menu holds WALLS ON/OFF, "1/9 ONLY" (see below), VIBRATE ON/OFF,
+  and an entry to edit your stored highscore nickname.
 - "1/9 ONLY": while it's on and you're actually playing (not paused/menu),
   any tap on the whole lower half of the phone - the keypad, the gray gap
   above it, and the side bezel around it, left half or right half - acts as
@@ -62,6 +62,22 @@ The page disables pinch/double-tap zoom and lays out full-height on a
 phone screen (screen near the top, keypad near the bottom, with a
 flexible gap between them) rather than sitting shrink-wrapped in the
 middle of the viewport.
+
+Every button press triggers a short `navigator.vibrate()` haptic tick
+(default on, toggle in OPTIONS). Android/Chrome supports this; iOS Safari
+has no vibration API at all, so it's silently a no-op there regardless of
+the setting.
+
+The page is installable as a home-screen app (manifest + icons), and shows
+a one-time banner suggesting it if it isn't already installed:
+- **Android/Chrome** gets a real "Installer" button, wired to the browser's
+  own install prompt (`beforeinstallprompt`).
+- **iOS Safari** has no install API at all, so the banner instead just
+  explains the manual steps (Share icon → "Legg til på Hjemskjerm").
+
+The banner is dismissible and stays dismissed (remembered in
+`localStorage`), and never shows on desktop or once already running
+standalone.
 
 ## Exposing it externally (e.g. via Cloudflare Tunnel)
 

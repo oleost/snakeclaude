@@ -4,6 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Snake</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/x-icon" href="icons/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#1b1d22">
+
+<!-- iOS has no install-prompt API - these are what make "Add to Home
+     Screen" behave like a real app (own window, no Safari chrome, own
+     status bar) once the user does it manually via the Share sheet -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Snake">
+
 <style>
   :root{
     color-scheme: dark;
@@ -195,6 +210,41 @@
   .key-mid{
     background:linear-gradient(160deg,#8a9a72,#5c6a4c);
   }
+
+  .install-banner{
+    position:fixed;
+    left:0; right:0; bottom:0;
+    display:none;
+    align-items:center;
+    gap:10px;
+    padding:10px 14px;
+    padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px));
+    background:#101216;
+    color:#c9cdd3;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size:12px;
+    border-top:1px solid #2a2d33;
+    z-index:50;
+  }
+  .install-text{ flex:1; line-height:1.35; }
+  .install-btn{
+    background:#5c6a4c;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:7px 10px;
+    font-size:12px;
+    font-weight:700;
+    white-space:nowrap;
+  }
+  .install-dismiss{
+    background:none;
+    border:none;
+    color:#8a8f99;
+    font-size:16px;
+    line-height:1;
+    padding:4px 6px;
+  }
 </style>
 </head>
 <body>
@@ -234,6 +284,12 @@
       <button class="key" data-action="" data-digit="0"><span class="num">0</span></button>
       <button class="key" data-action="" data-digit="#">#</button>
     </div>
+  </div>
+
+  <div id="installBanner" class="install-banner">
+    <span id="installText" class="install-text"></span>
+    <button id="installBtn" class="install-btn" style="display:none;">INSTALLER</button>
+    <button id="installDismiss" class="install-dismiss" aria-label="Lukk">✕</button>
   </div>
 
 <script>
@@ -341,6 +397,13 @@
   var MENU_ACTIONS = ["play", "multiplayer", "options", "highscore", "howto"];
   var optionsIndex = 0;
   var bigCornerButtons = localStorage.getItem("snakeBigCorner") === "1";
+  // default ON - only OFF if the user explicitly turned it off before.
+  // navigator.vibrate doesn't exist on iOS Safari/PWA at all (no haptics
+  // API there), so this silently does nothing on iPhone regardless.
+  var vibrationEnabled = localStorage.getItem("snakeVibration") !== "0";
+  function vibrate(ms){
+    if (vibrationEnabled && navigator.vibrate) navigator.vibrate(ms);
+  }
   var snake, dir, dirQueue, food, score, tickMs, acc, lastTime, justHitHighScore;
 
   // ---------- daily server leaderboard ----------
@@ -469,6 +532,7 @@
     return [
       "WALLS " + (wallsEnabled ? "ON" : "OFF"),
       "1/9 ONLY " + (bigCornerButtons ? "ON" : "OFF"),
+      "VIBRATE " + (vibrationEnabled ? "ON" : "OFF"),
       "NAME " + myStoredName("----")
     ];
   }
@@ -827,6 +891,10 @@
           bigCornerButtons = !bigCornerButtons;
           localStorage.setItem("snakeBigCorner", bigCornerButtons ? "1" : "0");
         } else if (optionsIndex === 2){
+          vibrationEnabled = !vibrationEnabled;
+          localStorage.setItem("snakeVibration", vibrationEnabled ? "1" : "0");
+          vibrate(20);
+        } else if (optionsIndex === 3){
           startNameEntry("edit");
         }
       }, function(){ state = "menu"; });
@@ -1212,6 +1280,7 @@
     btn.addEventListener("pointerdown", function(e){
       if (e.button > 0) return;
       e.preventDefault();
+      vibrate(10);
       if (state === "nameentry"){
         nameEntryKey(digit);
         return;
@@ -1232,6 +1301,7 @@
     btn.addEventListener("pointerdown", function(e){
       if (e.button > 0) return;
       e.preventDefault();
+      vibrate(10);
       window.dispatchEvent(new KeyboardEvent("keydown", {key: key, bubbles: true, cancelable: true}));
     });
   });
@@ -1255,6 +1325,7 @@
     if (!bigCornerButtons || state !== "playing") return;
     if (e.clientY < dpadEl.getBoundingClientRect().bottom) return;
     var pr = phoneEl.getBoundingClientRect();
+    vibrate(10);
     handleAction(e.clientX < pr.left + pr.width / 2 ? "corner-ul" : "corner-dr");
     e.stopPropagation();
   }, true);
@@ -1288,6 +1359,61 @@
   }, {passive:true});
 
   requestAnimationFrame(loop);
+})();
+</script>
+
+<script>
+(function(){
+  "use strict";
+  // "Add to Home Screen" prompt - separate from the game's own closure
+  // since it's a one-time page-chrome concern, not game state. Android
+  // Chrome has a real install API (beforeinstallprompt); iOS Safari has
+  // none at all, so the best we can do there is tell the user the manual
+  // Share-sheet steps.
+  if (localStorage.getItem("snakeInstallDismissed") === "1") return;
+  var standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (standalone) return;
+
+  var ua = navigator.userAgent;
+  var isIOS = /iPhone|iPad|iPod/.test(ua) && !window.MSStream;
+  var isAndroid = /Android/.test(ua);
+  if (!isIOS && !isAndroid) return; // desktop browser - nothing to prompt
+
+  var banner = document.getElementById("installBanner");
+  var text = document.getElementById("installText");
+  var btn = document.getElementById("installBtn");
+  var dismiss = document.getElementById("installDismiss");
+
+  function show(msg, withButton){
+    text.textContent = msg;
+    btn.style.display = withButton ? "inline-block" : "none";
+    banner.style.display = "flex";
+  }
+
+  dismiss.addEventListener("click", function(){
+    banner.style.display = "none";
+    localStorage.setItem("snakeInstallDismissed", "1");
+  });
+
+  if (isIOS){
+    show('Legg til som app: trykk Del-ikonet og velg "Legg til på Hjemskjerm"', false);
+  } else if (isAndroid){
+    var deferredPrompt = null;
+    window.addEventListener("beforeinstallprompt", function(e){
+      e.preventDefault();
+      deferredPrompt = e;
+      show("Installer Snake som app for raskere tilgang", true);
+    });
+    btn.addEventListener("click", function(){
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.finally(function(){
+        deferredPrompt = null;
+        banner.style.display = "none";
+        localStorage.setItem("snakeInstallDismissed", "1");
+      });
+    });
+  }
 })();
 </script>
 </body>
