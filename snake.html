@@ -392,7 +392,7 @@
 
   var state = "menu";
   // menu | highscore | howto | playing | paused | gameover | nameentry |
-  // mpmenu | mphostoptions | mphostwait | mpjoinmenu | mpjoinlist | mpjoincode | mpplaying | mpresult
+  // mpmenu | mphighscore | mphostoptions | mphostwait | mpjoinmenu | mpjoinlist | mpjoincode | mpplaying | mpresult
   var wallsEnabled = true; // classic mode: hitting the border ends the run
   var menuIndex = 0;
   var MENU_ACTIONS = ["play", "multiplayer", "options", "highscore", "howto"];
@@ -415,11 +415,15 @@
   var extraHp = EXTRA_HP_MAX_MS;
   var snake, dir, dirQueue, food, score, tickMs, acc, lastTime, justHitHighScore;
 
-  // ---------- daily server leaderboard ----------
+  // ---------- daily server leaderboard(s) - solo and multiplayer are two
+  // separate boards on the server, same shape, both reset together daily ----------
   var MAX_BOARD_ENTRIES = 5;
   var leaderboard = [];
   var leaderboardDate = null;
   var leaderboardAvailable = false;
+  var mpLeaderboard = [];
+  var mpLeaderboardAvailable = false;
+  var mpScoreSubmitted = false; // guards against re-submitting the same round's score
   var pendingScore = 0;
   var nameEntry = null;
 
@@ -439,6 +443,12 @@
     }).catch(function(){ leaderboardAvailable = false; });
   }
   loadLeaderboard();
+
+  function loadMpLeaderboard(){
+    wsConnect().then(function(){
+      wsSend({type: "getHighscores", board: "mp"});
+    }).catch(function(){ mpLeaderboardAvailable = false; });
+  }
 
   function qualifiesForBoard(s){
     if (!leaderboardAvailable || s <= 0) return false;
@@ -607,12 +617,17 @@
 
   function handleWsMessage(msg){
     if (msg.type === "highscores"){
-      leaderboard = msg.entries || [];
-      leaderboardDate = msg.date;
-      leaderboardAvailable = true;
-      if (state === "nameentry" && nameEntry && nameEntry.mode === "submit") state = "gameover"; // just-submitted score was accepted
+      if (msg.board === "mp"){
+        mpLeaderboard = msg.entries || [];
+        mpLeaderboardAvailable = true;
+      } else {
+        leaderboard = msg.entries || [];
+        leaderboardDate = msg.date;
+        leaderboardAvailable = true;
+        if (state === "nameentry" && nameEntry && nameEntry.mode === "submit") state = "gameover"; // just-submitted score was accepted
+      }
     } else if (msg.type === "highscoreError"){
-      if (state === "nameentry" && nameEntry && nameEntry.mode === "submit"){
+      if (msg.board !== "mp" && state === "nameentry" && nameEntry && nameEntry.mode === "submit"){
         nameEntry.error = msg.error === "profanity" ? "NOT ALLOWED" : "INVALID NAME";
       }
     } else if (msg.type === "hosted"){
@@ -651,11 +666,20 @@
       if ((mp.status === "playing" || mp.status === "countdown") && (state === "mphostwait" || state === "mpresult")){
         state = "mpplaying";
         mp.voted = false;
+        mpScoreSubmitted = false; // fresh round - this one's score hasn't been submitted yet
       }
       if (mp.status === "ended" && state !== "mpresult"){
         state = "mpresult";
         mpSubIndex = 0;
         mp.voted = false;
+        var myFinalScore = mp.you ? mp.you.score : 0;
+        if (!mpScoreSubmitted && myFinalScore > 0){
+          mpScoreSubmitted = true;
+          wsSend({
+            type: "submitHighscore", board: "mp",
+            name: myStoredName("GUEST"), score: myFinalScore, clientId: getClientId(),
+          });
+        }
       }
     }
   }
@@ -782,11 +806,17 @@
     if (!action) return;
 
     if (state === "mpmenu"){
-      var r1 = menuCycle(action, mpSubIndex, 2, function(){
-        state = mpSubIndex === 0 ? "mphostoptions" : "mpjoinmenu";
-        mpSubIndex = 0;
+      var r1 = menuCycle(action, mpSubIndex, 3, function(){
+        if (mpSubIndex === 0){ state = "mphostoptions"; mpSubIndex = 0; }
+        else if (mpSubIndex === 1){ state = "mpjoinmenu"; mpSubIndex = 0; }
+        else { loadMpLeaderboard(); state = "mphighscore"; }
       }, function(){ state = "menu"; });
       if (r1 !== undefined) mpSubIndex = r1;
+      return;
+    }
+
+    if (state === "mphighscore"){
+      if (action === "select" || action === "back"){ state = "mpmenu"; mpSubIndex = 0; }
       return;
     }
 
@@ -1159,7 +1189,9 @@
       lines.push("PRESS OK");
       drawOverlayBox(lines);
     } else if (state === "mpmenu"){
-      drawListMenu("MULTIPLAYER", ["HOST GAME","JOIN GAME"], mpSubIndex);
+      drawListMenu("MULTIPLAYER", ["HOST GAME","JOIN GAME","HIGH SCORE"], mpSubIndex);
+    } else if (state === "mphighscore"){
+      drawMpHighscoreBox();
     } else if (state === "mphostoptions"){
       drawListMenu("HOST GAME", ["PUBLIC","PRIVATE"], mpSubIndex);
     } else if (state === "mphostwait"){
@@ -1242,21 +1274,29 @@
     drawOverlayBox(lines);
   }
 
-  function drawHighscoreBox(){
-    if (!leaderboardAvailable){
-      drawOverlayBox(["HIGH SCORE","SERVER OFFLINE","PRESS OK"]);
+  function drawLeaderboardBox(title, available, entries){
+    if (!available){
+      drawOverlayBox([title, "SERVER OFFLINE", "PRESS OK"]);
       return;
     }
     var lines = [];
-    if (leaderboard.length === 0){
+    if (entries.length === 0){
       lines.push("NO SCORES YET");
     } else {
-      leaderboard.forEach(function(e){
+      entries.forEach(function(e){
         lines.push(e.name + " " + e.score);
       });
     }
     lines.push("PRESS OK");
     drawOverlayBox(lines);
+  }
+
+  function drawHighscoreBox(){
+    drawLeaderboardBox("HIGH SCORE", leaderboardAvailable, leaderboard);
+  }
+
+  function drawMpHighscoreBox(){
+    drawLeaderboardBox("MP HIGH SCORE", mpLeaderboardAvailable, mpLeaderboard);
   }
 
   function drawNameEntryBox(){

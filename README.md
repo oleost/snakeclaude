@@ -142,6 +142,15 @@ score, running into the opponent's body costs 10%. Whoever has more points
 once the penalty (if any) is applied wins the round. Both players then
 have to pick "replay" before a new round starts.
 
+Multiplayer has its own daily highscore board, separate from solo's -
+"HIGH SCORE" in the MULTIPLAYER menu. Each player's own score is submitted
+automatically the moment a round ends (win, lose, or draw), using their
+already-stored name - no extra name-entry step like solo's. Both boards
+live in the same highscore file and reset together at midnight, but are
+otherwise completely independent (same top-5, same profanity filter, same
+"only counts if it beats your own previous best" rule, applied separately
+to each board).
+
 Food spawns are biased toward whichever free cell is closest to equidistant
 from both snakes' heads, measured by actual shortest path (BFS around both
 bodies) rather than straight-line distance, so a snake's own tail or the

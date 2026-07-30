@@ -101,8 +101,9 @@ def load_board():
         except (json.JSONDecodeError, OSError):
             data = None
     if not data or data.get("date") != today:
-        data = {"date": today, "entries": []}
+        data = {"date": today, "entries": [], "mpEntries": []}
         save_board(data)
+    data.setdefault("mpEntries", [])  # file predates the multiplayer board
     return data
 
 
@@ -115,9 +116,13 @@ def public_entries(entries):
     return [{"name": e["name"], "score": e["score"]} for e in entries]
 
 
-def add_highscore(client_id, name, score):
+def board_key_for(board):
+    return "mpEntries" if board == "mp" else "entries"
+
+
+def add_highscore(board_key, client_id, name, score):
     data = load_board()
-    entries = data["entries"]
+    entries = data[board_key]
 
     existing = None
     if client_id:
@@ -130,7 +135,7 @@ def add_highscore(client_id, name, score):
 
     entries.append({"clientId": client_id, "name": name, "score": score, "ts": time.time()})
     entries.sort(key=lambda e: (-e["score"], e["ts"]))
-    data["entries"] = entries[:MAX_ENTRIES]
+    data[board_key] = entries[:MAX_ENTRIES]
     save_board(data)
     return data
 
@@ -470,29 +475,33 @@ async def ws_handler(websocket):
             mtype = msg.get("type")
 
             if mtype == "getHighscores":
+                board = msg.get("board") if msg.get("board") == "mp" else "solo"
                 data = load_board()
                 await websocket.send(json.dumps({
-                    "type": "highscores", "date": data["date"], "entries": public_entries(data["entries"])
+                    "type": "highscores", "board": board, "date": data["date"],
+                    "entries": public_entries(data[board_key_for(board)]),
                 }))
 
             elif mtype == "submitHighscore":
+                board = msg.get("board") if msg.get("board") == "mp" else "solo"
                 score = msg.get("score")
                 if not isinstance(score, (int, float)) or score <= 0:
-                    await websocket.send(json.dumps({"type": "highscoreError", "error": "invalid_score"}))
+                    await websocket.send(json.dumps({"type": "highscoreError", "board": board, "error": "invalid_score"}))
                     continue
                 name = sanitize_name(msg.get("name", ""))
                 if not name:
-                    await websocket.send(json.dumps({"type": "highscoreError", "error": "invalid_name"}))
+                    await websocket.send(json.dumps({"type": "highscoreError", "board": board, "error": "invalid_name"}))
                     continue
                 if contains_bad_word(name):
-                    await websocket.send(json.dumps({"type": "highscoreError", "error": "profanity"}))
+                    await websocket.send(json.dumps({"type": "highscoreError", "board": board, "error": "profanity"}))
                     continue
                 client_id = msg.get("clientId")
                 if not isinstance(client_id, str) or not (0 < len(client_id) <= 64):
                     client_id = None
-                data = add_highscore(client_id, name, int(score))
+                data = add_highscore(board_key_for(board), client_id, name, int(score))
                 await websocket.send(json.dumps({
-                    "type": "highscores", "date": data["date"], "entries": public_entries(data["entries"])
+                    "type": "highscores", "board": board, "date": data["date"],
+                    "entries": public_entries(data[board_key_for(board)]),
                 }))
 
             elif mtype == "host":
