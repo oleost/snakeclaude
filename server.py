@@ -24,13 +24,17 @@ phase with.
 Match rules: once both players are in (on join, or after both pick
 "replay"), there's a 3-2-1 countdown - both snakes are placed but frozen
 in position - before the round actually starts. Both snakes start in the
-middle heading away from each other. Any crash - wall, your own body,
-the opponent's body, or a head-on hit - ends the round immediately. A
-wall/self crash costs the crasher 20% of their score, running into the
-opponent's body costs 10%; a head-on hit costs nothing extra. Whoever
-has more points once the penalty (if any) is applied wins the round.
-Both players then have to pick "replay" before the next round's
-countdown starts.
+middle heading away from each other. A head-on hit (both heads meet or
+swap places) ends the round immediately for both, no penalty either way.
+Touching a wall, your own body, or the opponent's body instead draws down
+a 2-second "Extra HP" grace pool (host's OPTIONS setting, on by default)
+- the snake just holds in place while it's touching, and resumes normally
+if the player steers away before the pool empties. The pool never
+refills mid-round; once it's gone, the next touch ends the round for
+real. A wall/self crash then costs the crasher 20% of their score,
+running into the opponent's body costs 10%. Whoever has more points once
+the penalty (if any) is applied wins the round. Both players then have
+to pick "replay" before the next round's countdown starts.
 """
 
 import asyncio
@@ -143,6 +147,7 @@ OPP_PENALTY = 0.10
 FOOD_SCORE = 10
 WAITING_ROOM_TIMEOUT_S = 300  # a hosted room nobody ever joined gets swept
 COUNTDOWN_S = 3  # seconds of 3-2-1 shown before a round (or replay) actually starts
+EXTRA_HP_MAX_S = 2.0  # "Extra HP": shared grace pool (wall/self/opponent), doesn't refill mid-round
 
 rooms = {}  # code -> room dict
 
@@ -162,7 +167,7 @@ def spawn_snake(side):
     else:
         body = [[cx + 3, cy], [cx + 2, cy], [cx + 1, cy]]
         d = [1, 0]
-    return {"body": body, "dir": d, "nextDir": d, "score": 0}
+    return {"body": body, "dir": d, "nextDir": d, "score": 0, "hp": EXTRA_HP_MAX_S}
 
 
 def bfs_distances(start, blocked, w, h):
@@ -247,13 +252,14 @@ def reset_for_replay(room):
     start_countdown(room)
 
 
-def new_room(public, name, ws, walls_enabled):
+def new_room(public, name, ws, walls_enabled, extra_hp_enabled):
     now = time.monotonic()
     code = make_code()
     room = {
         "code": code,
         "public": public,
         "wallsEnabled": bool(walls_enabled),
+        "extraHpEnabled": bool(extra_hp_enabled),
         "status": "waiting",
         "created": now,
         "lastTick": now,
@@ -287,7 +293,10 @@ def list_public_rooms():
         if r["public"] and r["status"] == "waiting":
             host = r["players"].get(1)
             if host:
-                out.append({"code": r["code"], "hostName": host["name"], "walls": r["wallsEnabled"]})
+                out.append({
+                    "code": r["code"], "hostName": host["name"],
+                    "walls": r["wallsEnabled"], "extraHp": r["extraHpEnabled"],
+                })
     return out
 
 
@@ -301,10 +310,12 @@ def build_state_payload(room, my_num):
         "type": "state",
         "status": room["status"],
         "wallsEnabled": room["wallsEnabled"],
+        "extraHpEnabled": room["extraHpEnabled"],
         "food": room["food"],
         "you": {
             "body": my_snake["body"] if my_snake else [],
             "score": my_snake["score"] if my_snake else 0,
+            "hp": round((my_snake["hp"] if my_snake else EXTRA_HP_MAX_S) * 1000),  # ms, matches client's units
         },
         "opponent": ({
             "name": opp["name"],
@@ -354,27 +365,53 @@ def advance_room(room, now):
         h1 = [h1[0] % MP_GRID_W, h1[1] % MP_GRID_H]
         h2 = [h2[0] % MP_GRID_W, h2[1] % MP_GRID_H]
 
+    # head-on (mutual crash) is unaffected by Extra HP - it's a simultaneous
+    # collision between both players, not "one snake touching something".
     head_on = (h1 == h2) or (h1 == s2["body"][0] and h2 == s1["body"][0])
-    crashed = {}
-
-    if not head_on:
-        if wall_hit[1] or h1 in s1["body"]:
-            crashed[1] = WALL_PENALTY
-        if wall_hit[2] or h2 in s2["body"]:
-            crashed[2] = WALL_PENALTY
-        if 1 not in crashed and h1 in s2["body"]:
-            crashed[1] = OPP_PENALTY
-        if 2 not in crashed and h2 in s1["body"]:
-            crashed[2] = OPP_PENALTY
-
-    if head_on or crashed:
-        for num, frac in crashed.items():
-            room["snakes"][num]["score"] = int(room["snakes"][num]["score"] * (1 - frac))
-        winner = decide_winner(room["snakes"][1]["score"], room["snakes"][2]["score"])
-        end_room(room, winner, "headon" if head_on else "crash")
+    if head_on:
+        winner = decide_winner(s1["score"], s2["score"])
+        end_room(room, winner, "headon")
         return
 
-    for s, h in ((s1, h1), (s2, h2)):
+    # per-snake crash type: wall, own body, or the opponent's body all draw
+    # from the same "Extra HP" pool (if enabled) instead of ending the round
+    # immediately - see spawn_snake()'s "hp" field and EXTRA_HP_MAX_S.
+    crash_type = {}
+    if wall_hit[1] or h1 in s1["body"]:
+        crash_type[1] = "wall"
+    elif h1 in s2["body"]:
+        crash_type[1] = "opp"
+    if wall_hit[2] or h2 in s2["body"]:
+        crash_type[2] = "wall"
+    elif h2 in s1["body"]:
+        crash_type[2] = "opp"
+
+    extra_hp_on = room["extraHpEnabled"]
+    frozen = set()   # absorbed by HP this tick - snake holds in place
+    dying = {}       # HP exhausted (or feature off) - snake actually crashes now
+
+    for num, ctype in crash_type.items():
+        snake = room["snakes"][num]
+        penalty = WALL_PENALTY if ctype == "wall" else OPP_PENALTY
+        if extra_hp_on and snake["hp"] > 0:
+            snake["hp"] = max(0.0, snake["hp"] - MP_TICK_S)
+            if snake["hp"] <= 0:
+                dying[num] = penalty
+            else:
+                frozen.add(num)
+        else:
+            dying[num] = penalty
+
+    if dying:
+        for num, frac in dying.items():
+            room["snakes"][num]["score"] = int(room["snakes"][num]["score"] * (1 - frac))
+        winner = decide_winner(s1["score"], s2["score"])
+        end_room(room, winner, "crash")
+        return
+
+    for num, s, h in ((1, s1, h1), (2, s2, h2)):
+        if num in frozen:
+            continue
         s["body"].insert(0, h)
         if room["food"] and h == room["food"]:
             s["score"] += FOOD_SCORE
@@ -463,11 +500,14 @@ async def ws_handler(websocket):
                 if contains_bad_word(name):
                     await websocket.send(json.dumps({"type": "error", "message": "profanity"}))
                     continue
-                room = new_room(bool(msg.get("public")), name, websocket, msg.get("walls", True))
+                room = new_room(
+                    bool(msg.get("public")), name, websocket,
+                    msg.get("walls", True), msg.get("extraHp", True),
+                )
                 num = 1
                 await websocket.send(json.dumps({
                     "type": "hosted", "code": room["code"], "public": room["public"],
-                    "walls": room["wallsEnabled"],
+                    "walls": room["wallsEnabled"], "extraHp": room["extraHpEnabled"],
                 }))
 
             elif mtype == "join":
@@ -486,7 +526,8 @@ async def ws_handler(websocket):
                 room = joined_room
                 num = 2
                 await websocket.send(json.dumps({
-                    "type": "joined", "code": room["code"], "walls": room["wallsEnabled"],
+                    "type": "joined", "code": room["code"],
+                    "walls": room["wallsEnabled"], "extraHp": room["extraHpEnabled"],
                 }))
                 await broadcast(room)
 

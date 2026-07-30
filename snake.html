@@ -336,6 +336,7 @@
     "Z":["11111","00001","00010","00100","01000","10000","11111"],
     " ":["00000","00000","00000","00000","00000","00000","00000"],
     "-":["00000","00000","00000","11111","00000","00000","00000"],
+    "+":["00000","00100","00100","11111","00100","00100","00000"],
     "/":["00001","00001","00010","00100","01000","10000","10000"],
     "!":["00100","00100","00100","00100","00100","00000","00100"],
     ">":["01000","00100","00010","00001","00010","00100","01000"],
@@ -404,6 +405,14 @@
   function vibrate(ms){
     if (vibrationEnabled && navigator.vibrate) navigator.vibrate(ms);
   }
+  // "Extra HP": a shared 2-second grace pool (wall, own body, or - in
+  // multiplayer - the opponent's body) instead of instant death. It only
+  // drains while actually touching something crash-worthy and never
+  // refills mid-life/round - once it hits 0 the next touch is fatal, same
+  // as if this were off. Default ON.
+  var extraHpEnabled = localStorage.getItem("snakeExtraHp") !== "0";
+  var EXTRA_HP_MAX_MS = 2000;
+  var extraHp = EXTRA_HP_MAX_MS;
   var snake, dir, dirQueue, food, score, tickMs, acc, lastTime, justHitHighScore;
 
   // ---------- daily server leaderboard ----------
@@ -533,6 +542,7 @@
       "WALLS " + (wallsEnabled ? "ON" : "OFF"),
       "1/9 ONLY " + (bigCornerButtons ? "ON" : "OFF"),
       "VIBRATE " + (vibrationEnabled ? "ON" : "OFF"),
+      "EXTRA HP " + (extraHpEnabled ? "ON" : "OFF"),
       "NAME " + myStoredName("----")
     ];
   }
@@ -607,13 +617,13 @@
       }
     } else if (msg.type === "hosted"){
       mp = {
-        code: msg.code, public: msg.public, wallsEnabled: msg.walls,
+        code: msg.code, public: msg.public, wallsEnabled: msg.walls, extraHpEnabled: msg.extraHp,
         you: null, opponent: null, food: null, status: "waiting", winner: null, endReason: null, voted: false
       };
       state = "mphostwait";
     } else if (msg.type === "joined"){
       mp = {
-        code: msg.code, public: null, wallsEnabled: msg.walls,
+        code: msg.code, public: null, wallsEnabled: msg.walls, extraHpEnabled: msg.extraHp,
         you: null, opponent: null, food: null, status: "countdown", countdown: null,
         winner: null, endReason: null, voted: false
       };
@@ -634,6 +644,7 @@
       mp.food = msg.food;
       mp.status = msg.status;
       mp.wallsEnabled = msg.wallsEnabled;
+      mp.extraHpEnabled = msg.extraHpEnabled;
       mp.countdown = msg.countdown;
       mp.winner = msg.winner;
       mp.endReason = msg.endReason;
@@ -651,7 +662,7 @@
 
   function startHostGame(isPublic){
     wsConnect().then(function(){
-      wsSend({type: "host", public: isPublic, name: myStoredName("HOST"), walls: wallsEnabled});
+      wsSend({type: "host", public: isPublic, name: myStoredName("HOST"), walls: wallsEnabled, extraHp: extraHpEnabled});
     }).catch(function(){});
   }
 
@@ -837,6 +848,7 @@
     score = 0;
     tickMs = 160;
     acc = 0;
+    extraHp = EXTRA_HP_MAX_MS;
     justHitHighScore = false;
     placeFood();
   }
@@ -895,6 +907,9 @@
           localStorage.setItem("snakeVibration", vibrationEnabled ? "1" : "0");
           vibrate(20);
         } else if (optionsIndex === 3){
+          extraHpEnabled = !extraHpEnabled;
+          localStorage.setItem("snakeExtraHp", extraHpEnabled ? "1" : "0");
+        } else if (optionsIndex === 4){
           startNameEntry("edit");
         }
       }, function(){ state = "menu"; });
@@ -941,14 +956,28 @@
     var head = snake[0];
     var nx = head.x + dir.x;
     var ny = head.y + dir.y;
+    var crashed = false;
 
     if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H){
-      if (wallsEnabled) return gameOver();
-      nx = (nx + GRID_W) % GRID_W;
-      ny = (ny + GRID_H) % GRID_H;
+      if (wallsEnabled) crashed = true;
+      else {
+        nx = (nx + GRID_W) % GRID_W;
+        ny = (ny + GRID_H) % GRID_H;
+      }
     }
-    for (var i=0;i<snake.length;i++){
-      if (snake[i].x === nx && snake[i].y === ny) return gameOver();
+    if (!crashed){
+      for (var i=0;i<snake.length;i++){
+        if (snake[i].x === nx && snake[i].y === ny){ crashed = true; break; }
+      }
+    }
+
+    if (crashed){
+      if (extraHpEnabled && extraHp > 0){
+        extraHp = Math.max(0, extraHp - tickMs);
+        if (extraHp <= 0) return gameOver();
+        return; // absorbed by the HP pool this tick - snake holds in place
+      }
+      return gameOver();
     }
 
     snake.unshift({x:nx, y:ny});
@@ -988,6 +1017,24 @@
     drawText(ctx, s, 2, 1, FG);
     var hs = "HI " + highScore;
     drawText(ctx, hs, W-2-textWidth(hs), 1, FG);
+    if (extraHpEnabled && (state === "playing" || state === "paused")) drawExtraHpBar(extraHp);
+  }
+
+  // small depleting bar, top-center of the HUD strip - the free gap
+  // between the score (left) and HI/OP text (right) at typical lengths.
+  // Never refills mid-life/round, so it's meant to always be visible
+  // (not just while actively touching something) so the player can see
+  // how much of the pool is left at a glance.
+  function drawExtraHpBar(hp){
+    var barW = 24, barH = 3;
+    var x = Math.floor((W - barW) / 2);
+    var y = 2;
+    var frac = Math.max(0, Math.min(1, hp / EXTRA_HP_MAX_MS));
+    var fillW = Math.round(barW * frac);
+    ctx.fillStyle = MID; // empty track
+    ctx.fillRect(x, y, barW, barH);
+    ctx.fillStyle = FG; // remaining HP, shrinks from the right
+    if (fillW > 0) ctx.fillRect(x, y, fillW, barH);
   }
 
   function drawBorder(){
@@ -1118,14 +1165,16 @@
     } else if (state === "mphostwait"){
       drawOverlayBox([
         "CODE " + (mp ? mp.code : "----"),
-        (mp && mp.public ? "PUBLIC" : "PRIVATE") + " " + (mp && mp.wallsEnabled ? "#" : "O"),
+        (mp && mp.public ? "PUBLIC" : "PRIVATE") + " " + (mp && mp.wallsEnabled ? "#" : "O") + (mp && mp.extraHpEnabled ? "+" : "-"),
         "WAITING...",
         "BACK=CANCEL"
       ]);
     } else if (state === "mpjoinmenu"){
       drawListMenu("JOIN GAME", ["PUBLIC LIST","ENTER CODE"], mpSubIndex);
     } else if (state === "mpjoinlist"){
-      var roomItems = mpPublicRooms.map(function(r){ return r.code + " " + r.hostName + " " + (r.walls ? "#" : "O"); });
+      var roomItems = mpPublicRooms.map(function(r){
+        return r.code + " " + r.hostName + " " + (r.walls ? "#" : "O") + (r.extraHp ? "+" : "-");
+      });
       drawListMenu("ROOMS", roomItems, mpSubIndex);
     } else if (state === "mpjoincode"){
       var padded = mpJoinDigits.join("") + "_".repeat(4 - mpJoinDigits.length);
@@ -1143,6 +1192,7 @@
     drawText(ctx, String(myScore), 2, 1, FG);
     var label = "OP " + ((mp && mp.opponent) ? mp.opponent.score : 0);
     drawText(ctx, label, W-2-textWidth(label), 1, FG);
+    if (mp && mp.extraHpEnabled && mp.you) drawExtraHpBar(mp.you.hp != null ? mp.you.hp : EXTRA_HP_MAX_MS);
   }
 
   function drawMpPlaying(){

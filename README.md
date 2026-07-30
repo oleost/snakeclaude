@@ -47,7 +47,8 @@ copy of `snake.html` lingering on a phone after an update.
   classic "C" key) - mirrors the keypad's move/select/back everywhere,
   including menus, gameplay and multiplayer.
 - OPTIONS menu holds WALLS ON/OFF, "1/9 ONLY" (see below), VIBRATE ON/OFF,
-  and an entry to edit your stored highscore nickname.
+  EXTRA HP ON/OFF (see below), and an entry to edit your stored highscore
+  nickname.
 - "1/9 ONLY": while it's on and you're actually playing (not paused/menu),
   any tap on the whole lower half of the phone - the keypad, the gray gap
   above it, and the side bezel around it, left half or right half - acts as
@@ -55,6 +56,13 @@ copy of `snake.html` lingering on a phone after an update.
   This is decided from the actual tap position at click time rather than a
   fixed on-screen zone, so there's no dead spot anywhere below the nav
   cluster. The nav cluster (BACK/OK/up/down) itself is unaffected.
+- "EXTRA HP": a shared 2-second grace pool (default on) shown as a small
+  depleting bar top-center of the screen. Touching a wall, your own body,
+  or - in multiplayer - the opponent's body no longer means instant death;
+  instead the snake holds in place while the pool drains, and resumes
+  normally if you steer away before it empties. The pool doesn't refill
+  mid-life/round - once it's used up, the next touch is fatal exactly like
+  this were off.
 
 ## Mobile
 
@@ -111,23 +119,28 @@ WebSocket the instant anything changes - collisions, timing and scoring are
 always decided by the server, and there's no polling for the client to fall
 behind on.
 
-Walls on/off is the host's OPTIONS setting at the moment they start hosting
-- with walls off, going out of bounds wraps around to the opposite edge
-instead of crashing, same as solo mode. A small `#`/`O` marker (walls
-on/off) shows next to the code on the host's own waiting screen, and next
-to each room in the public room list so a joiner can see it before picking
-one.
+Walls on/off and Extra HP on/off are both the host's OPTIONS settings at
+the moment they start hosting - with walls off, going out of bounds wraps
+around to the opposite edge instead of crashing, same as solo mode. Small
+`#`/`O` (walls) and `+`/`-` (Extra HP) markers show next to the code on
+the host's own waiting screen, and next to each room in the public room
+list so a joiner can see both before picking one.
 
 Once both players are in (on join, or after both pick replay), there's a
 server-driven 3-2-1 countdown before the round actually starts - snakes are
 placed but frozen until it hits zero.
 
-Both snakes start in the middle heading away from each other. Any crash -
-wall, your own body, the opponent's body, or a head-on hit - ends the round
-immediately. A wall/self crash costs the crasher 20% of their score, running
-into the opponent's body costs 10%; a head-on hit costs nothing extra.
-Whoever has more points once the penalty (if any) is applied wins the round.
-Both players then have to pick "replay" before a new round starts.
+Both snakes start in the middle heading away from each other. A head-on
+hit (both heads meet, or swap places) ends the round immediately for both,
+no penalty either way. Touching a wall, your own body, or the opponent's
+body instead draws down each snake's own 2-second Extra HP pool (if that
+option is on) - the snake holds in place while touching, and resumes
+normally if steered away before the pool empties; the pool never refills
+mid-round. Once it's actually exhausted (or Extra HP is off), the same
+touch ends the round: a wall/self crash costs the crasher 20% of their
+score, running into the opponent's body costs 10%. Whoever has more points
+once the penalty (if any) is applied wins the round. Both players then
+have to pick "replay" before a new round starts.
 
 Food spawns are biased toward whichever free cell is closest to equidistant
 from both snakes' heads, measured by actual shortest path (BFS around both
