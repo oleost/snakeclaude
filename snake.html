@@ -1240,12 +1240,17 @@
   // than CSS percentage boxes - a fixed-size div nested in .keypad could
   // only ever cover .keypad's own box, never the gray gap above it or the
   // phone's own side padding, which is exactly where taps were being missed.
-  // Captured on .phone itself so it overrides every keypad button's own
-  // click handler (stopPropagation) while gameplay + the option are active;
-  // taps on the Nokia nav cluster (BACK/OK/up/down) are left untouched.
+  // Captured on the whole document (not just .phone) since .phone itself
+  // doesn't always fill the viewport width (width:min(92vw,380px) leaves a
+  // sliver of background on each side on a real, narrower phone screen) -
+  // a tap that visually lands "right next to key 9" can be just outside
+  // .phone's own box and would never reach a listener scoped to it.
+  // Overrides every keypad button's own handler (stopPropagation) while
+  // gameplay + the option are active; taps on the Nokia nav cluster
+  // (BACK/OK/up/down) are left untouched.
   var phoneEl = document.querySelector(".phone");
   var dpadEl = document.querySelector(".dpad");
-  phoneEl.addEventListener("pointerdown", function(e){
+  document.addEventListener("pointerdown", function(e){
     if (e.button > 0) return;
     if (!bigCornerButtons || state !== "playing") return;
     if (e.clientY < dpadEl.getBoundingClientRect().bottom) return;
